@@ -24,7 +24,15 @@ export default function ComingSoonPage(): JSX.Element {
         className="splash-reveal mx-auto flex w-full flex-col items-center"
       >
         <p className="mb-[clamp(10px,1.5vw,14px)] text-[clamp(10px,0.95vw,12px)] font-medium uppercase tracking-[0.18em] text-[color:var(--text-secondary)]">
-          Coming June 2026 · Currently on OpenCode
+          Coming June 2026 ·{" "}
+          <a
+            href="https://github.com/code-yeongyu/oh-my-openagent"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-[color:var(--text-tertiary)] decoration-1 underline-offset-[3px] transition-colors duration-200 hover:text-[color:var(--text-primary)] hover:decoration-[color:var(--text-primary)]"
+          >
+            Currently on OpenCode
+          </a>
         </p>
         <p className="text-[clamp(11px,1.1vw,14px)] font-medium uppercase tracking-[0.22em] text-[color:var(--text-primary)]">
           CODEX FOR NO-BRAINERS
