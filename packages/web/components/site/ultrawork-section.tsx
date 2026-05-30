@@ -15,14 +15,28 @@ export function UltraworkSection(): JSX.Element {
         </code>
       </div>
 
-      <div className="relative mt-16 w-full max-w-[960px]">
-        <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_center,rgba(135,240,242,0.15)_0%,transparent_70%)] blur-3xl" />
+      <div className="relative mt-24 flex w-full max-w-[960px] flex-col items-center rounded-3xl bg-black px-4 py-16 shadow-2xl ring-1 ring-white/5">
+        <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_center,rgba(135,240,242,0.08)_0%,transparent_70%)] blur-3xl" />
+        
+        <h3 
+          className="mb-12 text-center text-[clamp(28px,4vw,48px)] font-semibold tracking-tight"
+          style={{
+            background: "linear-gradient(180deg, #f0daaf 0%, #e4c380 50%, #5d5135 100%)",
+            WebkitBackgroundClip: "text",
+            backgroundClip: "text",
+            color: "transparent",
+            opacity: 0.85
+          }}
+        >
+          Ultrawork
+        </h3>
+
         <BrandImage
-          src="/img/ultrawork-orbit.png"
-          alt="Diagram showing the ultrawork loop activating multiple agents"
-          width={960}
-          height={643}
-          className="h-auto w-full"
+          src="/img/badge-ultrawork.png"
+          alt="Ultrawork"
+          width={897}
+          height={512}
+          className="h-auto w-full max-w-[560px]"
         />
       </div>
     </section>

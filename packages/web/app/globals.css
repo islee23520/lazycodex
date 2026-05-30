@@ -13,22 +13,24 @@
 
 @layer base {
   :root {
-    --surface-base: #14154d;
-    --card-base: #2a2dbf;
-    --brand-core: #5a5fef;
-    --brand-mid: #3236c4;
-    --brand-outer: #232897;
+    --surface-base: #0a0a0a;
+    --card-base: #0E1115;
+    --brand-core: #008385;
+    --brand-mid: #006668;
+    --brand-outer: #004d4e;
     --text-primary: #ffffff;
-    --text-secondary: #dcdcf8;
-    --text-tertiary: #b9bce6;
+    --text-secondary: #99A1AF;
+    --text-tertiary: #8A93A2;
     --text-muted: rgba(255, 255, 255, 0.72);
-    --text-soft: #e8e8ff;
+    --text-soft: #E4FFFF;
     --accent-cyan: #87F0F2;
     --accent-teal: #008385;
     --accent-mint: #B3FEFF;
     --accent-glow: #ABF5F7;
     --surface-night: #0A0A0A;
     --surface-panel: #0E1115;
+    --surface-panel-alt: #0C1217;
+    --surface-panel-deep: #0D1117;
   }
 
   html {
@@ -63,26 +65,26 @@
 
 @layer utilities {
   .card-gradient-base {
-    background: radial-gradient(120% 100% at 60% 65%, #5a5fef 0%, #4a4fe0 35%, #3236c4 70%, #232897 100%);
+    background: radial-gradient(120% 100% at 60% 65%, #008385 0%, #006668 35%, #004d4e 70%, #0a0a0a 100%);
   }
 
   .card-gradient-beam {
-    background: radial-gradient(55% 55% at 38% -8%, rgba(255,255,255,0.62) 0%, rgba(220,225,255,0.22) 35%, rgba(255,255,255,0) 65%),
-                radial-gradient(32% 28% at 55% -5%, rgba(255,255,255,0.42) 0%, rgba(255,255,255,0) 70%);
+    background: radial-gradient(55% 55% at 38% -8%, rgba(179,254,255,0.62) 0%, rgba(135,240,242,0.22) 35%, rgba(255,255,255,0) 65%),
+                radial-gradient(32% 28% at 55% -5%, rgba(171,245,247,0.42) 0%, rgba(255,255,255,0) 70%);
     mix-blend-mode: screen;
   }
 
   .card-gradient-sheen {
-    background: linear-gradient(118deg, transparent 18%, rgba(255,255,255,0.16) 26%, rgba(255,255,255,0.30) 30%, rgba(255,255,255,0.12) 35%, transparent 45%),
-                linear-gradient(112deg, transparent 8%, rgba(220,225,255,0.12) 15%, transparent 28%);
+    background: linear-gradient(118deg, transparent 18%, rgba(179,254,255,0.16) 26%, rgba(179,254,255,0.30) 30%, rgba(179,254,255,0.12) 35%, transparent 45%),
+                linear-gradient(112deg, transparent 8%, rgba(135,240,242,0.12) 15%, transparent 28%);
     filter: blur(20px);
     mix-blend-mode: screen;
     opacity: 0.85;
   }
 
   .card-gradient-pools {
-    background: radial-gradient(55% 50% at 8% 95%, rgba(150,180,255,0.26), transparent 70%),
-                radial-gradient(45% 45% at 95% 40%, rgba(180,150,255,0.20), transparent 70%);
+    background: radial-gradient(55% 50% at 8% 95%, rgba(0,131,133,0.26), transparent 70%),
+                radial-gradient(45% 45% at 95% 40%, rgba(135,240,242,0.20), transparent 70%);
     mix-blend-mode: screen;
   }
 
