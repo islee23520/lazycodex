@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic"
 export const revalidate = 60
 
 const LIVE_CACHE_CONTROL = "public, s-maxage=60, stale-while-revalidate=300"
-const FALLBACK_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=120"
+const FALLBACK_CACHE_CONTROL = "no-store"
 
 type GitHubStarsFallbackPayload = {
   readonly stars: number

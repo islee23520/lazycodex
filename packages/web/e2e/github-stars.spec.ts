@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 import {
   fetchGitHubStars,
@@ -84,5 +86,11 @@ test.describe("github stars live source parsing", () => {
     expect(parseShieldsStarsPayload({ value: "1,234" })).toBe(1_234)
     expect(parseShieldsStarsPayload({ message: "2.5k" })).toBe(2_500)
     expect(parseShieldsStarsPayload({ message: "invalid" })).toBeUndefined()
+  })
+
+  test("does not cache static fallback responses", () => {
+    const routeSource = readFileSync(join(process.cwd(), "app/api/github-stars/route.ts"), "utf8")
+
+    expect(routeSource).toContain('const FALLBACK_CACHE_CONTROL = "no-store"')
   })
 })
