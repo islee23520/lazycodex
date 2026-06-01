@@ -78,6 +78,46 @@ OmO is the best agent harness: discipline agents, parallel orchestration, multi-
 | 📋 **Hooks & Lifecycle** | Pre/post hooks for every agent action |
 | 🔧 **Zero Config** | Sensible defaults, override when you want |
 
+## 🧠 Why different GPT models appear
+
+Do not be surprised if an OmO/LazyCodex run shows models like `gpt-5.2`
+with `xhigh`, `gpt-5.4-mini`, `gpt-5.3-codex`, or newer equivalents like
+`gpt-5.5` with `xhigh`. That is intentional.
+
+OmO does not blindly spend your best model on every subtask. Its source
+defines task categories and fallback chains so the agent can pick the most
+appropriate model for the job: `quick` routes to `gpt-5.4-mini` for small
+edits, `ultrabrain` uses a high-reasoning GPT model for hard logic, and
+agentic coding paths can use Codex-tuned GPT models when available. See
+[`openai-categories.ts`](src/src/tools/delegate-task/openai-categories.ts)
+and [`model-requirements.ts`](src/packages/model-core/src/model-requirements.ts).
+
+The point is quota discipline: use the strongest model when the task needs
+deep reasoning, use a cheaper/faster model when that is enough, and keep
+parallel agent work efficient instead of burning premium quota on routine
+steps. This is benchmark-driven routing, not random model churn:
+
+- [GPT-5.2](https://openai.com/index/introducing-gpt-5-2/) is documented by
+  OpenAI as stronger at code review, bug finding, and complex tool use; the
+  announcement notes that its maximum API reasoning effort uses `xhigh`.
+- [GPT-5.3-Codex](https://developers.openai.com/api/docs/models/gpt-5.3-codex)
+  is OpenAI's Codex-tuned model for agentic software engineering, with public
+  coding-agent benchmarks such as SWE-Bench Pro, Terminal-Bench 2.0, and
+  OSWorld Verified reported in the
+  [GPT-5.3-Codex announcement](https://openai.com/index/introducing-gpt-5-3-codex).
+- [GPT-5.4 mini](https://openai.com/index/introducing-gpt-5-4-mini-and-nano/)
+  is positioned for efficient everyday coding, computer use, and subagents;
+  that is why lightweight OmO tasks can land there instead of spending a
+  frontier reasoning model.
+
+Reference links:
+
+- [OpenAI GPT-5.2 announcement](https://openai.com/index/introducing-gpt-5-2/)
+- [OpenAI GPT-5.2 model docs](https://platform.openai.com/docs/models/gpt-5.2/)
+- [OpenAI GPT-5.3-Codex model docs](https://developers.openai.com/api/docs/models/gpt-5.3-codex)
+- [OpenAI GPT-5.4 mini and nano announcement](https://openai.com/index/introducing-gpt-5-4-mini-and-nano/)
+- [OpenAI latest model guide](https://platform.openai.com/docs/guides/latest-model)
+
 ## 🏗️ Architecture
 
 LazyCodex is a thin distribution layer. The core engine is [oh-my-openagent (OmO)](https://github.com/code-yeongyu/oh-my-openagent), included as a submodule under `src/`.
