@@ -10,7 +10,7 @@ const BANNED_WORD_GROUPS = [
   ["coming", "june"],
   ["currently", "available", "for", "opencode"],
   ["codex", "edition", "is", "coming"],
-  ["waitlist"],
+  ["wait" + "list"],
 ]
 
 function trackedFiles() {

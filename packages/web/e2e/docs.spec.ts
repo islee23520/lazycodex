@@ -32,7 +32,7 @@ test.describe("docs page — structure", () => {
     }
   })
 
-  test("nav lists all six section titles as links or buttons", async ({ page }) => {
+  test("nav lists every section title as links or buttons", async ({ page }) => {
     await page.goto("/docs")
     const nav = page.getByRole("navigation")
     for (const section of DOC_SECTIONS) {
@@ -58,6 +58,21 @@ test.describe("docs page — structure", () => {
         })
         .first(),
     ).toBeVisible()
+  })
+
+  test("documents skills and game-development usage", async ({ page }) => {
+    await page.goto("/docs")
+
+    const body = page.locator("body")
+    await expect(body).toContainText("Build games with LazyCodex")
+    await expect(body).toContainText("/init-deep")
+    await expect(body).toContainText("Skill-first workflows")
+    await expect(body).toContainText("review-work")
+    await expect(body).toContainText("remove-ai-slops")
+    await expect(body).toContainText("frontend-ui-ux")
+    await expect(body).toContainText("LSP")
+    await expect(body).toContainText("AST-grep")
+    await expect(body).toContainText("comment-checker")
   })
 })
 

@@ -52,6 +52,61 @@ LazyCodex installs these as OmO commands for Codex. Invoke them with the
 
 Full documentation lives at [lazycodex.ai/docs](https://lazycodex.ai/docs).
 
+## Build games with LazyCodex
+
+The first time, there was no grand theory. It worked, so we kept using it.
+After working around a KartRider Drift codebase on [oba.run](https://oba.run),
+the pattern became clear: game projects are where LazyCodex makes the most
+sense.
+
+### 1. `/init-deep` is the map
+
+Game projects rarely fit a clean folder story. Big repos carry gameplay code,
+tools, editors, content pipelines, experiments, vendor drops, and old milestone
+work in the same tree. The goal is not to make the structure look pure before an
+agent can help. The goal is to give the agent landmarks.
+
+`/init-deep` builds that map by generating hierarchical `AGENTS.md` context. It
+scores complex directories, writes local guidance near the code that needs it,
+and lets future agents find the right files faster.
+
+### 2. A game MVP is usually not the product
+
+A POC can prove the loop. The product around it is usually several applications:
+Tools, data, launchers, editors, and build pipelines. If the agent only looks at
+the game executable, it misses the actual development system.
+
+LazyCodex keeps that wider context in play. Use `$ulw-plan` when the shape is
+still fuzzy, `$start-work` when the plan is ready, and `$ulw-loop` when you want
+the agent to keep moving until the evidence says it is done.
+
+### 3. Dense domains get faster with memory
+
+`/init-deep` is not only a first-run setup command. Rerun it when the milestone changes.
+Run it again when the repo shape changes or when a new subsystem becomes important.
+The result behaves like compressed project memory.
+
+In legacy game code, the hard part is not reading everything. The hard part is
+knowing where to read first. That is where LazyCodex is strong.
+
+### Skill-first workflows
+
+The three main commands stay simple, but the skill layer is where specialized
+work gets sharper:
+
+| Use case | Reach for |
+| --- | --- |
+| Map a messy game repo | `/init-deep` |
+| Turn vague production work into a plan | `$ulw-plan` |
+| Execute a plan with durable progress | `$start-work` |
+| Keep pushing until verified completion | `$ulw-loop` |
+| Review implementation from multiple angles | `review-work` |
+| Remove AI-looking code without changing behavior | `remove-ai-slops` |
+| Build polished UI surfaces | `frontend-ui-ux` |
+| Work safely in strict TypeScript, Rust, Python, or Go | `programming` |
+
+Start at [https://lazycodex.ai](https://lazycodex.ai).
+
 <hr />
 
 ## 💤 What is this?

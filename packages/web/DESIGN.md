@@ -80,15 +80,21 @@ The landing page is a single scrollable document with the following sections, to
    - `$start-work` — plan executor
    - Each card has a monospace command header, a one-line description, and a syntax example
 
-5. **Ultrawork explainer**
+5. **Game development + skills guide**
+   - The existing three command cards remain the main pillars and appear before this guide
+   - Adds "Build games with LazyCodex" positioning for large repos with gameplay, tools, data, launchers, editors, and build pipelines
+   - Calls out `/init-deep` as the map for messy project structure
+   - Lists skill-first workflows such as `review-work`, `remove-ai-slops`, `frontend-ui-ux`, `programming`, LSP, AST-grep, rules, and comment-checker
+
+6. **Ultrawork explainer**
    - Short paragraph on what `ultrawork` means (OmO discipline mode, parallel agents, auto-verification)
    - Link to the docs deep-dive
 
-6. **Docs CTA**
+7. **Docs CTA**
    - Large button: "Read the docs"
    - Secondary link: "View on GitHub"
 
-7. **Footer**
+8. **Footer**
    - Sisyphus Labs co-brand strip (night + panel colors)
    - Links: GitHub, OmO, sisyphuslabs.ai
    - MIT license note
