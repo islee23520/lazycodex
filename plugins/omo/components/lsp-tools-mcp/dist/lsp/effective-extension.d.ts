@@ -1,1 +1,1 @@
-export declare function effectiveExtension(filePath: string): string;
+export * from "@oh-my-opencode/lsp-core/lsp/effective-extension";

@@ -3,12 +3,213 @@
 // src/cli.ts
 import { argv, stderr } from "node:process";
 
-// src/git-bash-resolver.ts
+// ../mcp-stdio-core/src/record.ts
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+// ../mcp-stdio-core/src/responses.ts
+function successResponse(id, result) {
+  return { jsonrpc: "2.0", id, result };
+}
+function errorResponse(id, code, message, data) {
+  return { jsonrpc: "2.0", id, error: data === undefined ? { code, message } : { code, message, data } };
+}
+function jsonRpcId(value) {
+  return typeof value === "string" || typeof value === "number" || value === null ? value : null;
+}
+// ../mcp-stdio-core/src/transport.ts
+var HEADER_SEPARATOR = Buffer.from(`\r
+\r
+`);
+async function* readStdioJsonRpcMessages(input) {
+  let buffer = Buffer.alloc(0);
+  for await (const chunk of input) {
+    buffer = Buffer.concat([buffer, bufferFromChunk(chunk)]);
+    while (true) {
+      const result = readNextMessage(buffer);
+      if (result.kind === "incomplete")
+        break;
+      buffer = result.remaining;
+      if (result.message)
+        yield result.message;
+    }
+  }
+  const trailing = buffer.toString("utf8").trim();
+  if (trailing.length > 0) {
+    yield parseJsonPayload(trailing, "line");
+  }
+}
+function writeStdioJsonRpcResponse(output, response, responseMode) {
+  const body = JSON.stringify(response);
+  if (responseMode === "framed") {
+    output.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r
+\r
+${body}`);
+    return;
+  }
+  output.write(`${body}
+`);
+}
+function readNextMessage(buffer) {
+  if (buffer.length === 0)
+    return { kind: "incomplete" };
+  return startsWithContentLength(buffer) ? readFramedMessage(buffer) : readLineMessage(buffer);
+}
+function readLineMessage(buffer) {
+  const newlineIndex = buffer.indexOf(10);
+  if (newlineIndex === -1)
+    return { kind: "incomplete" };
+  const line = buffer.subarray(0, newlineIndex).toString("utf8").replace(/\r$/, "");
+  if (line.trim().length === 0) {
+    return { kind: "complete", remaining: buffer.subarray(newlineIndex + 1) };
+  }
+  return {
+    kind: "complete",
+    message: parseJsonPayload(line, "line"),
+    remaining: buffer.subarray(newlineIndex + 1)
+  };
+}
+function readFramedMessage(buffer) {
+  const separatorIndex = buffer.indexOf(HEADER_SEPARATOR);
+  if (separatorIndex === -1)
+    return { kind: "incomplete" };
+  const headers = buffer.subarray(0, separatorIndex).toString("ascii");
+  const contentLength = parseContentLength(headers);
+  const bodyStart = separatorIndex + HEADER_SEPARATOR.length;
+  if (contentLength === undefined) {
+    return {
+      kind: "complete",
+      message: {
+        kind: "parse_error",
+        message: "Missing or invalid Content-Length header",
+        responseMode: "framed"
+      },
+      remaining: buffer.subarray(bodyStart)
+    };
+  }
+  const bodyEnd = bodyStart + contentLength;
+  if (buffer.length < bodyEnd)
+    return { kind: "incomplete" };
+  const body = buffer.subarray(bodyStart, bodyEnd).toString("utf8");
+  return {
+    kind: "complete",
+    message: parseJsonPayload(body, "framed"),
+    remaining: buffer.subarray(bodyEnd)
+  };
+}
+function startsWithContentLength(buffer) {
+  const prefix = buffer.subarray(0, "content-length:".length).toString("ascii").toLowerCase();
+  return prefix === "content-length:";
+}
+function parseContentLength(headers) {
+  for (const line of headers.split(`\r
+`)) {
+    const match = /^content-length:\s*(\d+)$/i.exec(line);
+    if (match === null)
+      continue;
+    const value = match[1];
+    if (value === undefined)
+      return;
+    return Number(value);
+  }
+  return;
+}
+function parseJsonPayload(payload, responseMode) {
+  try {
+    return { kind: "request", payload: JSON.parse(payload), responseMode };
+  } catch (error) {
+    return { kind: "parse_error", message: error instanceof Error ? error.message : String(error), responseMode };
+  }
+}
+function bufferFromChunk(chunk) {
+  if (Buffer.isBuffer(chunk))
+    return chunk;
+  if (typeof chunk === "string")
+    return Buffer.from(chunk);
+  throw new TypeError(`Unsupported stdio chunk type: ${typeof chunk}`);
+}
+
+// ../mcp-stdio-core/src/server.ts
+var DEFAULT_IDLE_TIMEOUT_MS = 10 * 60000;
+var noopLog = () => {};
+async function runJsonRpcStdioServer(config) {
+  const log = config.log ?? noopLog;
+  const idleTimeoutMs = config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const idleTimer = createIdleTimer(idleTimeoutMs, log, config.onIdleTimeout);
+  log("stdio_started", { cwd: process.cwd(), idle_timeout_ms: idleTimeoutMs });
+  idleTimer.arm();
+  try {
+    for await (const message of readStdioJsonRpcMessages(config.input)) {
+      if (idleTimer.closed())
+        break;
+      idleTimer.arm();
+      if (message.kind === "parse_error") {
+        handleParseError(message, config, log);
+        continue;
+      }
+      await handleRequest(message, config, log);
+    }
+  } finally {
+    idleTimer.clear();
+    log("stdio_stopped");
+  }
+}
+function handleParseError(message, config, log) {
+  log("parse_error", { message: message.message });
+  const response = config.parseErrorResponse?.(message.message) ?? errorResponse(null, -32700, "Parse error", message.message);
+  if (response !== undefined) {
+    writeStdioJsonRpcResponse(config.output, response, message.responseMode);
+  }
+}
+async function handleRequest(message, config, log) {
+  const parsed = message.payload;
+  const id = isPlainRecord(parsed) ? jsonRpcId(parsed["id"]) : null;
+  const method = isPlainRecord(parsed) && typeof parsed["method"] === "string" ? parsed["method"] : null;
+  log("request", { id: id === null ? null : String(id), method });
+  try {
+    const response = await config.handler(parsed, config.handlerOptions);
+    if (response === undefined)
+      return;
+    writeStdioJsonRpcResponse(config.output, response, message.responseMode);
+    log("response", { id: String(response.id), method, is_error: response.error !== undefined });
+  } catch (error) {
+    if (config.onHandlerError === undefined)
+      throw error;
+    config.onHandlerError(error);
+  }
+}
+function createIdleTimer(idleTimeoutMs, log, onIdleTimeout) {
+  let timer = null;
+  let isClosed = false;
+  return {
+    arm: () => {
+      if (timer !== null)
+        clearTimeout(timer);
+      if (idleTimeoutMs <= 0)
+        return;
+      timer = setTimeout(() => {
+        isClosed = true;
+        log("idle_timeout", { idle_timeout_ms: idleTimeoutMs });
+        onIdleTimeout?.();
+      }, idleTimeoutMs);
+      timer.unref();
+    },
+    clear: () => {
+      if (timer === null)
+        return;
+      clearTimeout(timer);
+      timer = null;
+    },
+    closed: () => isClosed
+  };
+}
+// ../utils/src/runtime/git-bash.ts
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 var GIT_BASH_ENV_KEY = "OMO_CODEX_GIT_BASH_PATH";
 var PROGRAM_FILES_GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
 var PROGRAM_FILES_X86_GIT_BASH = "C:\\Program Files (x86)\\Git\\bin\\bash.exe";
+var NON_GIT_BASH_LAUNCHER_DIR_SEGMENTS = ["\\windows\\system32\\", "\\microsoft\\windowsapps\\"];
 function resolveGitBash(input) {
   if (input.platform !== "win32")
     return { found: true, path: null, source: "not-required", checkedPaths: [] };
@@ -16,8 +217,9 @@ function resolveGitBash(input) {
   const envPath = nonEmptyEnvValue(input.env, GIT_BASH_ENV_KEY);
   if (envPath !== undefined) {
     checkedPaths.push(envPath);
-    if (isBashExePath(envPath) && input.exists(envPath))
+    if (isBashExePath(envPath) && input.exists(envPath)) {
       return { found: true, path: envPath, source: "env", checkedPaths };
+    }
     return missingGitBash(checkedPaths);
   }
   for (const candidate of [
@@ -40,20 +242,20 @@ function resolveGitBash(input) {
   }
   return missingGitBash(checkedPaths);
 }
-function resolveGitBashForCurrentProcess(input = {}) {
+var resolveGitBashForCurrentProcess = (input = {}) => {
   return resolveGitBash({
     platform: input.platform ?? process.platform,
     env: input.env ?? process.env,
     exists: existsSync,
     where: whereCommand
   });
-}
+};
 function missingGitBash(checkedPaths) {
   return {
     found: false,
     checkedPaths,
     installHint: [
-      "Git Bash is required before the git_bash MCP can run commands on native Windows.",
+      "Git Bash is required on native Windows.",
       "Install it with: winget install --id Git.Git -e --source winget",
       `For a custom install, set ${GIT_BASH_ENV_KEY}=C:\\path\\to\\bash.exe`
     ].join(`
@@ -70,7 +272,6 @@ function nonEmptyEnvValue(env, key) {
 function isBashExePath(path) {
   return path.toLowerCase().endsWith("bash.exe");
 }
-var NON_GIT_BASH_LAUNCHER_DIR_SEGMENTS = ["\\windows\\system32\\", "\\microsoft\\windowsapps\\"];
 function isKnownNonGitBashLauncher(path) {
   const normalized = path.replaceAll("/", "\\").toLowerCase();
   return NON_GIT_BASH_LAUNCHER_DIR_SEGMENTS.some((segment) => normalized.includes(segment));
@@ -84,9 +285,8 @@ function whereCommand(command) {
     throw error;
   }
 }
-
 // src/runner.ts
-import { spawn } from "node:child_process";
+import { spawn as spawn2 } from "node:child_process";
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,7 +313,7 @@ async function runGitBashCommand(input) {
       rmSync(outputDirectory, { recursive: true, force: true });
       return { stdout, stderr };
     }
-    const child = spawn(input.bashPath, ["-lc", input.command], {
+    const child = spawn2(input.bashPath, ["-lc", input.command], {
       cwd: input.cwd,
       env: input.env,
       windowsHide: true,
@@ -149,10 +349,10 @@ var EXEC_COMMAND_TIMEOUT_ENV_KEYS = [
   "EXEC_COMMAND_TIMEOUT_MS"
 ];
 async function handleGitBashMcpRequest(input, options = {}) {
-  if (!isRecord(input))
+  if (!isPlainRecord(input))
     return errorResponse(null, -32600, "Invalid Request");
-  const id = jsonRpcId(input.id);
-  const method = typeof input.method === "string" ? input.method : null;
+  const id = jsonRpcId(input["id"]);
+  const method = typeof input["method"] === "string" ? input["method"] : null;
   if (method === "initialize") {
     const protocolVersion = protocolVersionFromInput(input) ?? "2024-11-05";
     return successResponse(id, {
@@ -164,9 +364,9 @@ async function handleGitBashMcpRequest(input, options = {}) {
   if (method === "tools/list")
     return successResponse(id, { tools: toolsForOptions(options) });
   if (method === "tools/call") {
-    const params = isRecord(input.params) ? input.params : {};
-    const name = typeof params.name === "string" ? params.name : "";
-    const args = isRecord(params.arguments) ? params.arguments : {};
+    const params = isPlainRecord(input["params"]) ? input["params"] : {};
+    const name = typeof params["name"] === "string" ? params["name"] : "";
+    const args = isPlainRecord(params["arguments"]) ? params["arguments"] : {};
     return await callTool(id, name, args, options);
   }
   if (method === "notifications/initialized")
@@ -176,24 +376,13 @@ async function handleGitBashMcpRequest(input, options = {}) {
 async function runMcpStdioServer(input, output, options = {}) {
   if (!canRunGitBash(options))
     return;
-  let buffer = "";
-  for await (const chunk of input) {
-    buffer += String(chunk);
-    while (true) {
-      const lineEnd = buffer.indexOf(`
-`);
-      if (lineEnd === -1)
-        break;
-      const line = buffer.slice(0, lineEnd).trim();
-      buffer = buffer.slice(lineEnd + 1);
-      if (line.length === 0)
-        continue;
-      const response = await handleGitBashMcpRequest(parseJsonRpcLine(line), options);
-      if (response !== undefined)
-        output.write(`${JSON.stringify(response)}
-`);
-    }
-  }
+  await runJsonRpcStdioServer({
+    input,
+    output,
+    handler: handleGitBashMcpRequest,
+    handlerOptions: options,
+    parseErrorResponse: () => errorResponse(null, -32601, "Method not found")
+  });
 }
 async function callTool(id, name, args, options) {
   if (name === "which_bash")
@@ -315,12 +504,6 @@ function runPayload(result) {
 function toolResponse(id, text, isError = false) {
   return successResponse(id, { content: [{ type: "text", text }], isError });
 }
-function successResponse(id, result) {
-  return { jsonrpc: "2.0", id, result };
-}
-function errorResponse(id, code, message, data) {
-  return { jsonrpc: "2.0", id, error: data === undefined ? { code, message } : { code, message, data } };
-}
 function parseWorkdir(args) {
   const value = args.workdir ?? args.cwd;
   if (value === undefined)
@@ -354,23 +537,10 @@ function normalizeTimeoutMs(value) {
   return timeoutMs;
 }
 function protocolVersionFromInput(input) {
-  if (!isRecord(input.params))
+  if (!isPlainRecord(input["params"]))
     return null;
-  return typeof input.params.protocolVersion === "string" ? input.params.protocolVersion : null;
-}
-function parseJsonRpcLine(line) {
-  try {
-    const parsed = JSON.parse(line);
-    return parsed;
-  } catch (error) {
-    return { jsonrpc: "2.0", id: null, method: null, parseError: error instanceof Error ? error.message : String(error) };
-  }
-}
-function jsonRpcId(value) {
-  return typeof value === "string" || typeof value === "number" || value === null ? value : null;
-}
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  const params = input["params"];
+  return typeof params["protocolVersion"] === "string" ? params["protocolVersion"] : null;
 }
 
 // src/cli.ts

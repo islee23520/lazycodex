@@ -1,1 +1,1 @@
-export declare function reportBestEffortCleanupError(operation: string, error: unknown): void;
+export * from "@oh-my-opencode/lsp-core/lsp/cleanup-errors";

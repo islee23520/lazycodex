@@ -12,12 +12,12 @@ This skill may include examples copied from the OpenCode harness. In Codex, do n
 | `call_omo_agent(subagent_type="explore", ...)` | `multi_agent_v1.spawn_agent({"message":"TASK: act as an explorer. ...","agent_type":"explorer","fork_context":false})` |
 | `call_omo_agent(subagent_type="librarian", ...)` | `multi_agent_v1.spawn_agent({"message":"TASK: act as a librarian. ...","agent_type":"librarian","fork_context":false})` |
 | `task(subagent_type="plan", ...)` | `multi_agent_v1.spawn_agent({"message":"TASK: act as a planning agent. ...","agent_type":"plan","fork_context":false})` |
-| `task(subagent_type="oracle", ...)` for final verification | `multi_agent_v1.spawn_agent({"message":"TASK: act as a rigorous reviewer. ...","agent_type":"codex-ultrawork-reviewer","fork_context":false})` |
+| `task(subagent_type="oracle", ...)` for final verification | `multi_agent_v1.spawn_agent({"message":"TASK: act as a rigorous reviewer. ...","agent_type":"lazycodex-gate-reviewer","fork_context":false})` |
 | `task(category="...", ...)` for implementation or QA | `multi_agent_v1.spawn_agent({"message":"TASK: act as an implementation or QA worker. ...","fork_context":false})` |
 | `background_output(task_id="...")` | `multi_agent_v1.wait_agent(...)` for mailbox signals |
 | `team_*(...)` | Use Codex native subagents via `multi_agent_v1.spawn_agent`, `multi_agent_v1.send_input`, `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent` |
 
-Role-specific behavior must be described in a self-contained `message`. Use `fork_context: false` to start the child with only the initial prompt (no parent history); use `fork_context: true` only when full parent history is truly required. Include any required conversation context, files, diffs, constraints, and requested skill names directly in the spawned agent's `message`. OMO installs these selectable agent roles into `~/.codex/agents/`: `explorer`, `librarian`, `plan`, `momus`, `metis`, and `codex-ultrawork-reviewer` — pass the matching name as `agent_type` so the child gets that role's model and instructions. On `multi_agent_v2` sessions the same `agent_type` applies (the OMO installer exposes it) with `fork_turns` instead of `fork_context`. If the spawn tool exposes no `agent_type` parameter, omit it and describe the role inside `message`. If a code block below conflicts with this section, this section wins.
+Role-specific behavior must be described in a self-contained `message`. Use `fork_context: false` to start the child with only the initial prompt (no parent history); use `fork_context: true` only when full parent history is truly required. Include any required conversation context, files, diffs, constraints, and requested skill names directly in the spawned agent's `message`. OMO installs these selectable agent roles into `~/.codex/agents/`: `explorer`, `librarian`, `plan`, `momus`, `metis`, `lazycodex-code-reviewer`, `lazycodex-qa-executor`, and `lazycodex-gate-reviewer` - pass the matching name as `agent_type` so the child gets that role's model and instructions. If the spawn tool exposes no `agent_type` parameter, omit it and describe the role inside `message`. If a code block below conflicts with this section, this section wins.
 
 For work likely to exceed one wait cycle, require the child to send `WORKING: <task> - <current phase>` before long passes and `BLOCKED: <reason>` only when progress stops. A `multi_agent_v1.wait_agent` timeout only means no new mailbox update arrived. Treat a running child as alive. Fallback only when the child is completed without the deliverable, ack-only after followup, explicitly `BLOCKED:`, or no longer running.
 
@@ -185,23 +185,14 @@ LspWorkspaceSymbols(filePath, query="[target_symbol]")  // Search by name
 lsp_diagnostics(filePath)  // Errors, warnings before we start
 \`\`\`
 
-### AST-Grep for Pattern Analysis:
+### AST-Grep Skill for Pattern Analysis:
 
-\`\`\`typescript
+\`\`\`bash
 // Find structural patterns
-ast_grep_search(
-  pattern="function $NAME($$$) { $$$ }",  // or relevant pattern
-  lang="typescript",  // or relevant language
-  paths=["src/"]
-)
+python3 scripts/ast_grep_helper.py search 'function $NAME($$$) { $$$ }' --lang ts src/
 
-// Preview refactoring (DRY RUN)
-ast_grep_replace(
-  pattern="[old_pattern]",
-  rewrite="[new_pattern]",
-  lang="[language]",
-  dryRun=true  // ALWAYS preview first
-)
+# Preview refactoring first
+sg --pattern '[old_pattern]' --rewrite '[new_pattern]' --lang ts src/
 \`\`\`
 
 ### Grep for Text Patterns:
@@ -447,12 +438,12 @@ lsp_rename(filePath, line, character, newName)  // Execute rename
 \`\`\`
 
 **For Pattern Transformations:**
-\`\`\`typescript
+\`\`\`bash
 // Preview first
-ast_grep_replace(pattern, rewrite, lang, dryRun=true)
+sg --pattern '[pattern]' --rewrite '[rewrite]' --lang ts path/to/file.ts
 
 // If preview looks good, execute
-ast_grep_replace(pattern, rewrite, lang, dryRun=false)
+python3 scripts/ast_grep_helper.py replace '[pattern]' '[rewrite]' --lang ts path/to/file.ts --apply
 \`\`\`
 
 **For Structural Changes:**
@@ -588,7 +579,7 @@ All existing tests pass. No new errors introduced.
 
 ## ALWAYS DO
 - Understand before changing
-- Preview before applying (ast_grep dryRun=true)
+- Preview before applying (`sg --pattern ... --rewrite ... --lang ...`)
 - Verify after every change
 - Follow existing codebase patterns
 - Keep todos updated in real-time
@@ -617,8 +608,8 @@ Leverage LSP tools for precision analysis. Key patterns:
 - **Continuous verification**: \`lsp_diagnostics\` after every change
 
 ## AST-Grep
-Use \`ast_grep_search\` and \`ast_grep_replace\` for structural transformations.
-**Critical**: Always \`dryRun=true\` first, review, then execute.
+Use \`ast-grep\` skill helper or \`sg\` CLI for structural transformations.
+**Critical**: Always preview first, review, then execute.
 
 ## Agents
 - \`explore\`: Parallel codebase pattern discovery
@@ -702,7 +693,7 @@ Record the chosen path in the TodoWrite list.
     {
       "kind": "category",
       "category": "unspecified-low",
-      "prompt": "You handle logic-preserving refactors that need reasoning (extract function, restructure conditional, pattern transformation, cross-file API change). Read the task description's plan step carefully. Use ast_grep_replace with dryRun=true first, review the preview, then execute. If the step is ambiguous or would require out-of-scope changes, STOP and send team_send_message(teamRunId=<id>, to=\"lead\", summary=\"UNCLEAR\", body=<reason>) + team_task_update(status=pending). Same reporting contract as peer quick workers. Never run tests."
+      "prompt": "You handle logic-preserving refactors that need reasoning (extract function, restructure conditional, pattern transformation, cross-file API change). Read the task description's plan step carefully. Use the ast-grep skill helper or sg CLI to preview structural rewrites first, review the preview, then execute. If the step is ambiguous or would require out-of-scope changes, STOP and send team_send_message(teamRunId=<id>, to=\"lead\", summary=\"UNCLEAR\", body=<reason>) + team_task_update(status=pending). Same reporting contract as peer quick workers. Never run tests."
     },
     { "kind": "category", "category": "unspecified-low", "prompt": "Same contract as peer unspecified-low worker." }
   ]

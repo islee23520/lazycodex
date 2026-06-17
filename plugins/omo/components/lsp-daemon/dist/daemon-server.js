@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { disposeDefaultLspManager, getLspManager } from "@code-yeongyu/lsp-tools-mcp/dist/lsp/manager.js";
+import { disposeDefaultLspManager, getLspManager } from "@oh-my-opencode/lsp-core/lsp/manager";
 import { unlinkQuietly } from "./lock.js";
 import { handleDaemonMessage } from "./request-routing.js";
 import { createLineDecoder, encodeJsonLine } from "./socket-jsonrpc.js";

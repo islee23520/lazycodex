@@ -1,5 +1,5 @@
-import { handleLspMcpRequest } from "@code-yeongyu/lsp-tools-mcp/dist/mcp.js";
-import { runWithRequestContext } from "@code-yeongyu/lsp-tools-mcp/dist/request-context.js";
+import { handleLspMcpRequest } from "@oh-my-opencode/lsp-core/mcp";
+import { runWithRequestContext } from "@oh-my-opencode/lsp-core/request-context";
 export const CONTEXT_KEY = "_context";
 export function extractRequestContext(raw) {
     if (!isRecord(raw) || raw["method"] !== "tools/call")

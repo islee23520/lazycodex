@@ -1,1 +1,1 @@
-export declare function inferExtensionFromDirectory(directory: string): string | null;
+export * from "@oh-my-opencode/lsp-core/lsp/infer-extension";

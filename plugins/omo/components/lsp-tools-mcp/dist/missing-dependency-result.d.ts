@@ -1,2 +1,1 @@
-import type { ToolExecutionResult } from "./tools.js";
-export declare function missingDependencyResult<TDetails extends object>(error: unknown, details: TDetails): ToolExecutionResult | null;
+export * from "@oh-my-opencode/lsp-core/missing-dependency-result";

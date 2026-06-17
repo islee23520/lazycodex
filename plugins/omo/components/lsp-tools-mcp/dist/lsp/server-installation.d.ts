@@ -1,1 +1,1 @@
-export declare function isServerInstalled(command: string[], _workingDirectory?: string): boolean;
+export * from "@oh-my-opencode/lsp-core/lsp/server-installation";

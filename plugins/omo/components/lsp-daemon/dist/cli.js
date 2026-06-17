@@ -3,17 +3,217 @@
 // src/cli.ts
 import { argv, stderr } from "node:process";
 
-// src/proxy.ts
-import { createInterface } from "node:readline";
+// ../mcp-stdio-core/src/record.ts
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+// ../mcp-stdio-core/src/responses.ts
+function successResponse(id, result) {
+  return { jsonrpc: "2.0", id, result };
+}
+function errorResponse(id, code, message, data) {
+  return { jsonrpc: "2.0", id, error: data === undefined ? { code, message } : { code, message, data } };
+}
+function jsonRpcId(value) {
+  return typeof value === "string" || typeof value === "number" || value === null ? value : null;
+}
+function messageFromError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+// ../mcp-stdio-core/src/transport.ts
+var HEADER_SEPARATOR = Buffer.from(`\r
+\r
+`);
+async function* readStdioJsonRpcMessages(input) {
+  let buffer = Buffer.alloc(0);
+  for await (const chunk of input) {
+    buffer = Buffer.concat([buffer, bufferFromChunk(chunk)]);
+    while (true) {
+      const result = readNextMessage(buffer);
+      if (result.kind === "incomplete")
+        break;
+      buffer = result.remaining;
+      if (result.message)
+        yield result.message;
+    }
+  }
+  const trailing = buffer.toString("utf8").trim();
+  if (trailing.length > 0) {
+    yield parseJsonPayload(trailing, "line");
+  }
+}
+function writeStdioJsonRpcResponse(output, response, responseMode) {
+  const body = JSON.stringify(response);
+  if (responseMode === "framed") {
+    output.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r
+\r
+${body}`);
+    return;
+  }
+  output.write(`${body}
+`);
+}
+function readNextMessage(buffer) {
+  if (buffer.length === 0)
+    return { kind: "incomplete" };
+  return startsWithContentLength(buffer) ? readFramedMessage(buffer) : readLineMessage(buffer);
+}
+function readLineMessage(buffer) {
+  const newlineIndex = buffer.indexOf(10);
+  if (newlineIndex === -1)
+    return { kind: "incomplete" };
+  const line = buffer.subarray(0, newlineIndex).toString("utf8").replace(/\r$/, "");
+  if (line.trim().length === 0) {
+    return { kind: "complete", remaining: buffer.subarray(newlineIndex + 1) };
+  }
+  return {
+    kind: "complete",
+    message: parseJsonPayload(line, "line"),
+    remaining: buffer.subarray(newlineIndex + 1)
+  };
+}
+function readFramedMessage(buffer) {
+  const separatorIndex = buffer.indexOf(HEADER_SEPARATOR);
+  if (separatorIndex === -1)
+    return { kind: "incomplete" };
+  const headers = buffer.subarray(0, separatorIndex).toString("ascii");
+  const contentLength = parseContentLength(headers);
+  const bodyStart = separatorIndex + HEADER_SEPARATOR.length;
+  if (contentLength === undefined) {
+    return {
+      kind: "complete",
+      message: {
+        kind: "parse_error",
+        message: "Missing or invalid Content-Length header",
+        responseMode: "framed"
+      },
+      remaining: buffer.subarray(bodyStart)
+    };
+  }
+  const bodyEnd = bodyStart + contentLength;
+  if (buffer.length < bodyEnd)
+    return { kind: "incomplete" };
+  const body = buffer.subarray(bodyStart, bodyEnd).toString("utf8");
+  return {
+    kind: "complete",
+    message: parseJsonPayload(body, "framed"),
+    remaining: buffer.subarray(bodyEnd)
+  };
+}
+function startsWithContentLength(buffer) {
+  const prefix = buffer.subarray(0, "content-length:".length).toString("ascii").toLowerCase();
+  return prefix === "content-length:";
+}
+function parseContentLength(headers) {
+  for (const line of headers.split(`\r
+`)) {
+    const match = /^content-length:\s*(\d+)$/i.exec(line);
+    if (match === null)
+      continue;
+    const value = match[1];
+    if (value === undefined)
+      return;
+    return Number(value);
+  }
+  return;
+}
+function parseJsonPayload(payload, responseMode) {
+  try {
+    return { kind: "request", payload: JSON.parse(payload), responseMode };
+  } catch (error) {
+    return { kind: "parse_error", message: error instanceof Error ? error.message : String(error), responseMode };
+  }
+}
+function bufferFromChunk(chunk) {
+  if (Buffer.isBuffer(chunk))
+    return chunk;
+  if (typeof chunk === "string")
+    return Buffer.from(chunk);
+  throw new TypeError(`Unsupported stdio chunk type: ${typeof chunk}`);
+}
 
-// ../lsp-tools-mcp/dist/tools.js
-import { resolve as resolve5 } from "node:path";
+// ../mcp-stdio-core/src/server.ts
+var DEFAULT_IDLE_TIMEOUT_MS = 10 * 60000;
+var noopLog = () => {};
+async function runJsonRpcStdioServer(config) {
+  const log = config.log ?? noopLog;
+  const idleTimeoutMs = config.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const idleTimer = createIdleTimer(idleTimeoutMs, log, config.onIdleTimeout);
+  log("stdio_started", { cwd: process.cwd(), idle_timeout_ms: idleTimeoutMs });
+  idleTimer.arm();
+  try {
+    for await (const message of readStdioJsonRpcMessages(config.input)) {
+      if (idleTimer.closed())
+        break;
+      idleTimer.arm();
+      if (message.kind === "parse_error") {
+        handleParseError(message, config, log);
+        continue;
+      }
+      await handleRequest(message, config, log);
+    }
+  } finally {
+    idleTimer.clear();
+    log("stdio_stopped");
+  }
+}
+function handleParseError(message, config, log) {
+  log("parse_error", { message: message.message });
+  const response = config.parseErrorResponse?.(message.message) ?? errorResponse(null, -32700, "Parse error", message.message);
+  if (response !== undefined) {
+    writeStdioJsonRpcResponse(config.output, response, message.responseMode);
+  }
+}
+async function handleRequest(message, config, log) {
+  const parsed = message.payload;
+  const id = isPlainRecord(parsed) ? jsonRpcId(parsed["id"]) : null;
+  const method = isPlainRecord(parsed) && typeof parsed["method"] === "string" ? parsed["method"] : null;
+  log("request", { id: id === null ? null : String(id), method });
+  try {
+    const response = await config.handler(parsed, config.handlerOptions);
+    if (response === undefined)
+      return;
+    writeStdioJsonRpcResponse(config.output, response, message.responseMode);
+    log("response", { id: String(response.id), method, is_error: response.error !== undefined });
+  } catch (error) {
+    if (config.onHandlerError === undefined)
+      throw error;
+    config.onHandlerError(error);
+  }
+}
+function createIdleTimer(idleTimeoutMs, log, onIdleTimeout) {
+  let timer = null;
+  let isClosed = false;
+  return {
+    arm: () => {
+      if (timer !== null)
+        clearTimeout(timer);
+      if (idleTimeoutMs <= 0)
+        return;
+      timer = setTimeout(() => {
+        isClosed = true;
+        log("idle_timeout", { idle_timeout_ms: idleTimeoutMs });
+        onIdleTimeout?.();
+      }, idleTimeoutMs);
+      timer.unref();
+    },
+    clear: () => {
+      if (timer === null)
+        return;
+      clearTimeout(timer);
+      timer = null;
+    },
+    closed: () => isClosed
+  };
+}
+// ../lsp-core/src/tools/diagnostics.ts
+import { resolve as resolve4 } from "node:path";
 
-// ../lsp-tools-mcp/dist/lsp/client-wrapper.js
+// ../lsp-core/src/lsp/client-wrapper.ts
 import { existsSync as existsSync5, statSync as statSync2 } from "node:fs";
 import { dirname as dirname2, join as join5, resolve as resolve2 } from "node:path";
 
-// ../lsp-tools-mcp/dist/request-context.js
+// ../lsp-core/src/request-context.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 var storage = new AsyncLocalStorage;
 function runWithRequestContext(context, fn) {
@@ -29,7 +229,7 @@ function contextEnv(key) {
   return process.env[key];
 }
 
-// ../lsp-tools-mcp/dist/lsp/effective-extension.js
+// ../lsp-core/src/lsp/effective-extension.ts
 import { basename, extname } from "node:path";
 var BASENAME_EXTENSIONS = {
   Dockerfile: ".dockerfile",
@@ -39,17 +239,24 @@ function effectiveExtension(filePath) {
   return BASENAME_EXTENSIONS[basename(filePath)] ?? extname(filePath);
 }
 
-// ../lsp-tools-mcp/dist/lsp/errors.js
+// ../lsp-core/src/lsp/errors.ts
 class LspConnectionClosedError extends Error {
+  serverId;
+  root;
+  name = "LspConnectionClosedError";
   constructor(serverId, root, message) {
     super(message ?? `LSP connection closed for ${serverId} at ${root}`);
     this.serverId = serverId;
     this.root = root;
-    this.name = "LspConnectionClosedError";
   }
 }
 
 class LspProcessExitedError extends Error {
+  serverId;
+  root;
+  exitCode;
+  stderrTail;
+  name = "LspProcessExitedError";
   constructor(serverId, root, exitCode, stderrTail) {
     const stderrSuffix = stderrTail ? `
 stderr tail: ${stderrTail}` : "";
@@ -58,54 +265,47 @@ stderr tail: ${stderrTail}` : "";
     this.root = root;
     this.exitCode = exitCode;
     this.stderrTail = stderrTail;
-    this.name = "LspProcessExitedError";
   }
 }
 
 class LspRequestTimeoutError extends Error {
+  method;
+  stderrTail;
+  name = "LspRequestTimeoutError";
   constructor(method, stderrTail) {
     const stderrSuffix = stderrTail ? `
 recent stderr: ${stderrTail}` : "";
     super(`LSP request timeout (method: ${method})${stderrSuffix}`);
     this.method = method;
     this.stderrTail = stderrTail;
-    this.name = "LspRequestTimeoutError";
   }
 }
 
 class LspInvalidPathError extends Error {
-  constructor() {
-    super(...arguments);
-    this.name = "LspInvalidPathError";
-  }
+  name = "LspInvalidPathError";
 }
 
 class LspServerLookupError extends Error {
-  constructor() {
-    super(...arguments);
-    this.name = "LspServerLookupError";
-  }
+  name = "LspServerLookupError";
 }
 
 class LspServerInitializingError extends Error {
+  originalError;
+  name = "LspServerInitializingError";
   constructor(originalError) {
     super(`LSP server is still initializing. Please retry in a few seconds. Original error: ${originalError.message}`);
     this.originalError = originalError;
-    this.name = "LspServerInitializingError";
   }
 }
 
 class LspProcessSpawnError extends Error {
-  constructor() {
-    super(...arguments);
-    this.name = "LspProcessSpawnError";
-  }
+  name = "LspProcessSpawnError";
 }
 function isLspDeadConnectionError(err) {
   return err instanceof LspConnectionClosedError || err instanceof LspProcessExitedError;
 }
 
-// ../lsp-tools-mcp/dist/lsp/cleanup-errors.js
+// ../lsp-core/src/lsp/cleanup-errors.ts
 function reportBestEffortCleanupError(operation, error) {
   if (process.env["CODEX_LSP_DEBUG_CLEANUP"] !== "1")
     return;
@@ -113,15 +313,15 @@ function reportBestEffortCleanupError(operation, error) {
   console.error(`[codex-lsp] ignored ${operation} failure during cleanup: ${message}`);
 }
 
-// ../lsp-tools-mcp/dist/lsp/client.js
+// ../lsp-core/src/lsp/client.ts
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
-// ../lsp-tools-mcp/dist/lsp/connection.js
+// ../lsp-core/src/lsp/connection.ts
 import { pathToFileURL } from "node:url";
 
-// ../lsp-tools-mcp/dist/lsp/constants.js
+// ../lsp-core/src/lsp/constants.ts
 var DEFAULT_MAX_REFERENCES = 200;
 var DEFAULT_MAX_SYMBOLS = 200;
 var DEFAULT_MAX_DIAGNOSTICS = 200;
@@ -133,8 +333,8 @@ var REAPER_INTERVAL_MS = 60000;
 var STOP_HARD_KILL_TIMEOUT_MS = 5000;
 var STOP_SIGKILL_GRACE_MS = 1000;
 
-// ../lsp-tools-mcp/dist/lsp/json-rpc-connection.js
-var HEADER_SEPARATOR = `\r
+// ../lsp-core/src/lsp/json-rpc-connection.ts
+var HEADER_SEPARATOR2 = `\r
 \r
 `;
 var PARSE_ERROR = -32700;
@@ -143,31 +343,20 @@ var METHOD_NOT_FOUND = -32601;
 var INTERNAL_ERROR = -32603;
 
 class JsonRpcConnection {
+  reader;
+  writer;
+  pendingRequests = new Map;
+  notificationHandlers = new Map;
+  requestHandlers = new Map;
+  closeHandlers = [];
+  errorHandlers = [];
+  inputBuffer = Buffer.alloc(0);
+  nextRequestId = 1;
+  listening = false;
+  disposed = false;
   constructor(reader, writer) {
     this.reader = reader;
     this.writer = writer;
-    this.pendingRequests = new Map;
-    this.notificationHandlers = new Map;
-    this.requestHandlers = new Map;
-    this.closeHandlers = [];
-    this.errorHandlers = [];
-    this.inputBuffer = Buffer.alloc(0);
-    this.nextRequestId = 1;
-    this.listening = false;
-    this.disposed = false;
-    this.handleData = (chunk) => {
-      const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
-      this.inputBuffer = Buffer.concat([this.inputBuffer, chunkBuffer]);
-      this.drainInputBuffer();
-    };
-    this.handleClose = () => {
-      for (const handler of this.closeHandlers) {
-        handler();
-      }
-    };
-    this.handleStreamError = (error) => {
-      this.emitError(error);
-    };
   }
   listen() {
     if (this.listening)
@@ -235,19 +424,32 @@ class JsonRpcConnection {
     this.notificationHandlers.clear();
     this.requestHandlers.clear();
   }
+  handleData = (chunk) => {
+    const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+    this.inputBuffer = Buffer.concat([this.inputBuffer, chunkBuffer]);
+    this.drainInputBuffer();
+  };
+  handleClose = () => {
+    for (const handler of this.closeHandlers) {
+      handler();
+    }
+  };
+  handleStreamError = (error) => {
+    this.emitError(error);
+  };
   drainInputBuffer() {
     while (true) {
-      const headerEnd = this.inputBuffer.indexOf(HEADER_SEPARATOR);
+      const headerEnd = this.inputBuffer.indexOf(HEADER_SEPARATOR2);
       if (headerEnd === -1)
         return;
       const headers = this.inputBuffer.subarray(0, headerEnd).toString("ascii");
-      const contentLength = parseContentLength(headers);
+      const contentLength = parseContentLength2(headers);
       if (contentLength === null) {
         this.inputBuffer = Buffer.alloc(0);
         this.emitError(new Error("JSON-RPC message is missing Content-Length header"));
         return;
       }
-      const bodyStart = headerEnd + Buffer.byteLength(HEADER_SEPARATOR);
+      const bodyStart = headerEnd + Buffer.byteLength(HEADER_SEPARATOR2);
       const bodyEnd = bodyStart + contentLength;
       if (this.inputBuffer.length < bodyEnd)
         return;
@@ -345,7 +547,7 @@ ${body}`;
     }
   }
 }
-function parseContentLength(headers) {
+function parseContentLength2(headers) {
   for (const line of headers.split(`\r
 `)) {
     const separatorIndex = line.indexOf(":");
@@ -382,7 +584,7 @@ function toError(error) {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-// ../lsp-tools-mcp/dist/lsp/process.js
+// ../lsp-core/src/lsp/process.ts
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
@@ -528,7 +730,7 @@ function spawnProcess(command, options) {
   return wrap(proc);
 }
 
-// ../lsp-tools-mcp/dist/lsp/transport.js
+// ../lsp-core/src/lsp/transport.ts
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -552,14 +754,18 @@ function parseDiagnosticsParams(params) {
 }
 
 class LspClientTransport {
-  constructor(root, server, timeouts = {}) {
+  root;
+  server;
+  proc = null;
+  connection = null;
+  stderrBuffer = [];
+  processExited = false;
+  diagnosticsStore = new Map;
+  requestTimeoutMs;
+  initializeTimeoutMs;
+  constructor(root, server2, timeouts = {}) {
     this.root = root;
-    this.server = server;
-    this.proc = null;
-    this.connection = null;
-    this.stderrBuffer = [];
-    this.processExited = false;
-    this.diagnosticsStore = new Map;
+    this.server = server2;
     this.requestTimeoutMs = timeouts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
     this.initializeTimeoutMs = timeouts.initializeTimeoutMs ?? INIT_TIMEOUT_MS;
   }
@@ -758,7 +964,7 @@ function isPosition(value) {
   return isRecord(value) && typeof value["line"] === "number" && typeof value["character"] === "number";
 }
 
-// ../lsp-tools-mcp/dist/lsp/connection.js
+// ../lsp-core/src/lsp/connection.ts
 var INITIALIZE_SETTLE_MS = 300;
 
 class LspClientConnection extends LspClientTransport {
@@ -824,7 +1030,7 @@ class LspClientConnection extends LspClientTransport {
   }
 }
 
-// ../lsp-tools-mcp/dist/lsp/language-mappings.js
+// ../lsp-core/src/lsp/language-mappings.ts
 var SYMBOL_KIND_MAP = {
   1: "File",
   2: "Module",
@@ -996,18 +1202,15 @@ function getLanguageId(ext) {
   return EXT_TO_LANG[ext] ?? "plaintext";
 }
 
-// ../lsp-tools-mcp/dist/lsp/client.js
+// ../lsp-core/src/lsp/client.ts
 var POST_OPEN_DELAY_MS = 1000;
 var POST_DIAGNOSTICS_WAIT_MS = 500;
 
 class LspClient extends LspClientConnection {
-  constructor() {
-    super(...arguments);
-    this.openedFiles = new Set;
-    this.documentVersions = new Map;
-    this.lastSyncedText = new Map;
-    this.diagnosticPullErrors = [];
-  }
+  openedFiles = new Set;
+  documentVersions = new Map;
+  lastSyncedText = new Map;
+  diagnosticPullErrors = [];
   getDiagnosticPullErrors() {
     return this.diagnosticPullErrors;
   }
@@ -1122,7 +1325,7 @@ class LspClient extends LspClientConnection {
   }
 }
 
-// ../lsp-tools-mcp/dist/lsp/process-signal-cleanup.js
+// ../lsp-core/src/lsp/process-signal-cleanup.ts
 function installProcessSignalCleanup(cleanup) {
   const signals = process.platform === "win32" ? ["SIGINT", "SIGTERM", "SIGBREAK"] : ["SIGINT", "SIGTERM"];
   const handler = () => {
@@ -1140,7 +1343,7 @@ function installProcessSignalCleanup(cleanup) {
   };
 }
 
-// ../lsp-tools-mcp/dist/lsp/manager.js
+// ../lsp-core/src/lsp/manager.ts
 async function stopClientBestEffort(client) {
   try {
     await client.stop();
@@ -1181,15 +1384,20 @@ function awaitWithSignal(promise, signal) {
 }
 
 class LspManager {
+  clients = new Map;
+  reaperHandle = null;
+  signalDisposer = null;
+  disposed = false;
+  idleTimeoutMs;
+  initTimeoutMs;
+  reaperIntervalMs;
+  clientFactory;
+  now;
   constructor(options = {}) {
-    this.clients = new Map;
-    this.reaperHandle = null;
-    this.signalDisposer = null;
-    this.disposed = false;
     this.idleTimeoutMs = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS;
     this.initTimeoutMs = options.initTimeoutMs ?? INIT_TIMEOUT_MS;
     this.reaperIntervalMs = options.reaperIntervalMs ?? REAPER_INTERVAL_MS;
-    this.clientFactory = options.clientFactory ?? ((root, server) => new LspClient(root, server));
+    this.clientFactory = options.clientFactory ?? ((root, server2) => new LspClient(root, server2));
     this.now = options.now ?? (() => Date.now());
     this.startReaper();
     this.signalDisposer = installProcessSignalCleanup(() => this.stopAll());
@@ -1227,12 +1435,12 @@ class LspManager {
       await stopClientBestEffort(managed.client);
     }
   }
-  async getClient(root, server, signal) {
+  async getClient(root, server2, signal) {
     if (this.disposed) {
       throw new Error("LspManager has been disposed");
     }
     signal?.throwIfAborted();
-    const key = this.getKey(root, server.id);
+    const key = this.getKey(root, server2.id);
     let managed = this.clients.get(key);
     if (managed) {
       const t = this.now();
@@ -1261,13 +1469,13 @@ class LspManager {
       if (!managed.client.isAlive()) {
         await stopClientBestEffort(managed.client);
         this.clients.delete(key);
-        return this.getClient(root, server, signal);
+        return this.getClient(root, server2, signal);
       }
       managed.refCount++;
       managed.lastUsedAt = this.now();
       return managed.client;
     }
-    const client = this.clientFactory(root, server);
+    const client = this.clientFactory(root, server2);
     const initStartedAt = this.now();
     const initPromise = (async () => {
       await client.start();
@@ -1323,13 +1531,13 @@ class LspManager {
     this.clients.delete(key);
     stopClientBestEffort(managed.client);
   }
-  warmupClient(root, server) {
+  warmupClient(root, server2) {
     if (this.disposed)
       return;
-    const key = this.getKey(root, server.id);
+    const key = this.getKey(root, server2.id);
     if (this.clients.has(key))
       return;
-    const client = this.clientFactory(root, server);
+    const client = this.clientFactory(root, server2);
     const initStartedAt = this.now();
     const initPromise = (async () => {
       await client.start();
@@ -1417,7 +1625,7 @@ async function disposeDefaultLspManager() {
   }
 }
 
-// ../lsp-tools-mcp/dist/lsp/server-install-state.js
+// ../lsp-core/src/lsp/server-install-state.ts
 import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join as join2 } from "node:path";
@@ -1469,12 +1677,12 @@ function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// ../lsp-tools-mcp/dist/lsp/config-loader.js
+// ../lsp-core/src/lsp/config-loader.ts
 import { existsSync as existsSync3, readFileSync as readFileSync3 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { delimiter as delimiter2, isAbsolute as isAbsolute2, join as join3 } from "node:path";
 
-// ../lsp-tools-mcp/dist/lsp/server-definitions.js
+// ../lsp-core/src/lsp/server-definitions.ts
 var LSP_INSTALL_HINTS = {
   typescript: "npm install -g typescript-language-server typescript",
   deno: "Install Deno from https://deno.land",
@@ -1621,7 +1829,7 @@ var BUILTIN_SERVERS = {
   }
 };
 
-// ../lsp-tools-mcp/dist/lsp/config-loader.js
+// ../lsp-core/src/lsp/config-loader.ts
 function resolveProjectConfigPath(path) {
   return isAbsolute2(path) ? path : join3(contextCwd(), path);
 }
@@ -1686,10 +1894,10 @@ function getMergedServers() {
       }
       if (seen.has(id))
         continue;
-      const server = createServerFromEntry(id, entry, source);
-      if (!server)
+      const server2 = createServerFromEntry(id, entry, source);
+      if (!server2)
         continue;
-      servers.push(server);
+      servers.push(server2);
       seen.add(id);
     }
   }
@@ -1721,7 +1929,7 @@ function createServerFromEntry(id, entry, source) {
   if (source === "project") {
     if (!builtin)
       return null;
-    const server2 = createServer({
+    const server3 = createServer({
       id,
       command: builtin.command,
       extensions: entry.extensions ?? builtin.extensions,
@@ -1729,35 +1937,35 @@ function createServerFromEntry(id, entry, source) {
       source
     });
     if (entry.initialization !== undefined) {
-      server2.initialization = entry.initialization;
+      server3.initialization = entry.initialization;
     }
-    return server2;
+    return server3;
   }
   if (entry.command && entry.extensions) {
-    const server2 = createServer({
+    const server3 = createServer({
       id,
       command: entry.command,
       extensions: entry.extensions,
       priority: entry.priority ?? 0,
       source
     });
-    applyOptionalServerFields(server2, entry);
-    return server2;
+    applyOptionalServerFields(server3, entry);
+    return server3;
   }
   if (!builtin)
     return null;
-  const server = createServer({
+  const server2 = createServer({
     id,
     command: entry.command ?? builtin.command,
     extensions: entry.extensions ?? builtin.extensions,
     priority: entry.priority ?? 0,
     source
   });
-  applyOptionalServerFields(server, entry);
-  return server;
+  applyOptionalServerFields(server2, entry);
+  return server2;
 }
 function createServer(input) {
-  const server = {
+  const server2 = {
     id: input.id,
     command: input.command,
     extensions: input.extensions,
@@ -1765,19 +1973,19 @@ function createServer(input) {
     source: input.source
   };
   if (input.env !== undefined) {
-    server.env = input.env;
+    server2.env = input.env;
   }
   if (input.initialization !== undefined) {
-    server.initialization = input.initialization;
+    server2.initialization = input.initialization;
   }
-  return server;
+  return server2;
 }
-function applyOptionalServerFields(server, entry) {
+function applyOptionalServerFields(server2, entry) {
   if (entry.env !== undefined) {
-    server.env = entry.env;
+    server2.env = entry.env;
   }
   if (entry.initialization !== undefined) {
-    server.initialization = entry.initialization;
+    server2.initialization = entry.initialization;
   }
 }
 function isConfigJson(value) {
@@ -1826,7 +2034,7 @@ function getDisabledServerIds() {
   return disabled;
 }
 
-// ../lsp-tools-mcp/dist/lsp/server-installation.js
+// ../lsp-core/src/lsp/server-installation.ts
 import { existsSync as existsSync4 } from "node:fs";
 import { delimiter as delimiter3, join as join4 } from "node:path";
 function isServerInstalled(command, _workingDirectory) {
@@ -1867,24 +2075,24 @@ function isServerInstalled(command, _workingDirectory) {
   return false;
 }
 
-// ../lsp-tools-mcp/dist/lsp/server-resolution.js
+// ../lsp-core/src/lsp/server-resolution.ts
 function findServerForExtension(ext) {
   const servers = getMergedServers();
-  for (const server of servers) {
-    if (server.extensions.includes(ext) && isServerInstalled(server.command)) {
+  for (const server2 of servers) {
+    if (server2.extensions.includes(ext) && isServerInstalled(server2.command)) {
       const resolvedServer = {
-        id: server.id,
-        command: server.command,
-        extensions: server.extensions,
-        priority: server.priority
+        id: server2.id,
+        command: server2.command,
+        extensions: server2.extensions,
+        priority: server2.priority
       };
-      if (server.env !== undefined) {
+      if (server2.env !== undefined) {
         return {
           status: "found",
           server: {
             ...resolvedServer,
-            env: server.env,
-            ...server.initialization === undefined ? {} : { initialization: server.initialization }
+            env: server2.env,
+            ...server2.initialization === undefined ? {} : { initialization: server2.initialization }
           }
         };
       }
@@ -1892,20 +2100,20 @@ function findServerForExtension(ext) {
         status: "found",
         server: {
           ...resolvedServer,
-          ...server.initialization === undefined ? {} : { initialization: server.initialization }
+          ...server2.initialization === undefined ? {} : { initialization: server2.initialization }
         }
       };
     }
   }
-  for (const server of servers) {
-    if (server.extensions.includes(ext)) {
-      const installHint = LSP_INSTALL_HINTS[server.id] ?? `Install '${server.command[0]}' and ensure it's in your PATH`;
+  for (const server2 of servers) {
+    if (server2.extensions.includes(ext)) {
+      const installHint = LSP_INSTALL_HINTS[server2.id] ?? `Install '${server2.command[0]}' and ensure it's in your PATH`;
       return {
         status: "not_installed",
         server: {
-          id: server.id,
-          command: server.command,
-          extensions: server.extensions
+          id: server2.id,
+          command: server2.command,
+          extensions: server2.extensions
         },
         installHint
       };
@@ -1923,18 +2131,18 @@ function getAllServers() {
   const disabled = getDisabledServerIds();
   const result = [];
   const seen = new Set;
-  for (const server of servers) {
-    if (seen.has(server.id))
+  for (const server2 of servers) {
+    if (seen.has(server2.id))
       continue;
     result.push({
-      id: server.id,
-      installed: isServerInstalled(server.command),
-      extensions: server.extensions,
+      id: server2.id,
+      installed: isServerInstalled(server2.command),
+      extensions: server2.extensions,
       disabled: false,
-      source: server.source,
-      priority: server.priority
+      source: server2.source,
+      priority: server2.priority
     });
-    seen.add(server.id);
+    seen.add(server2.id);
   }
   for (const id of disabled) {
     if (seen.has(id))
@@ -1952,7 +2160,7 @@ function getAllServers() {
   return result;
 }
 
-// ../lsp-tools-mcp/dist/lsp/client-wrapper.js
+// ../lsp-core/src/lsp/client-wrapper.ts
 var WORKSPACE_MARKERS = [".git", "package.json", "pyproject.toml", "Cargo.toml", "go.mod", "pom.xml", "build.gradle"];
 function isDirectoryPath(filePath) {
   try {
@@ -2001,16 +2209,16 @@ function formatServerLookupError(result) {
 `);
 }
 function formatNotInstalled(result) {
-  const { server, installHint } = result;
-  const extensions = server.extensions.join(", ");
-  const decision = loadInstallDecision(server.id)?.decision;
+  const { server: server2, installHint } = result;
+  const extensions = server2.extensions.join(", ");
+  const decision = loadInstallDecision(server2.id)?.decision;
   if (decision === "declined") {
-    return `LSP server '${server.id}' (${extensions}) is NOT INSTALLED; user previously declined installation — proceed without LSP.`;
+    return `LSP server '${server2.id}' (${extensions}) is NOT INSTALLED; user previously declined installation — proceed without LSP.`;
   }
   const header = [
-    `LSP server '${server.id}' for ${extensions} is NOT INSTALLED.`,
+    `LSP server '${server2.id}' for ${extensions} is NOT INSTALLED.`,
     "",
-    `Command not found: ${server.command[0]}`,
+    `Command not found: ${server2.command[0]}`,
     ""
   ];
   if (decision === "allowed") {
@@ -2029,7 +2237,7 @@ function formatNotInstalled(result) {
     "ACTION REQUIRED — ASK THE USER whether to install this LSP server.",
     "- If the user agrees: run the install command above, then retry this tool.",
     "- If the user declines, OR has NOT explicitly asked for LSP installation:",
-    `    call lsp_install_decision { server_id: "${server.id}", decision: "declined" },`,
+    `    call lsp_install_decision { server_id: "${server2.id}", decision: "declined" },`,
     "    then ignore this message and proceed WITHOUT LSP."
   ].join(`
 `);
@@ -2052,36 +2260,36 @@ async function withLspClient(filePath, fn, toolName, options = {}) {
   if (result.status !== "found") {
     throw new LspServerLookupError(formatServerLookupError(result));
   }
-  const server = result.server;
+  const server2 = result.server;
   const root = findWorkspaceRoot(absPath);
   const manager = options.manager ?? getLspManager();
   const acquireAndCall = async (allowRetry) => {
-    const client = await manager.getClient(root, server, options.signal);
+    const client = await manager.getClient(root, server2, options.signal);
     try {
       return await fn(client, root);
     } catch (err) {
       if (allowRetry && READ_ONLY_RETRY_TOOLS.has(toolName) && isLspDeadConnectionError(err)) {
-        manager.invalidateClient(root, server.id, client);
+        manager.invalidateClient(root, server2.id, client);
         return acquireAndCall(false);
       }
       if (err instanceof LspRequestTimeoutError) {
-        if (manager.isServerInitializing(root, server.id)) {
+        if (manager.isServerInitializing(root, server2.id)) {
           throw new LspServerInitializingError(err);
         }
       }
       throw err;
     } finally {
-      manager.releaseClient(root, server.id);
+      manager.releaseClient(root, server2.id);
     }
   };
   return acquireAndCall(true);
 }
 
-// ../lsp-tools-mcp/dist/lsp/directory-diagnostics.js
+// ../lsp-core/src/lsp/directory-diagnostics.ts
 import { existsSync as existsSync6, lstatSync, readdirSync } from "node:fs";
 import { join as join6, resolve as resolve3 } from "node:path";
 
-// ../lsp-tools-mcp/dist/lsp/formatters.js
+// ../lsp-core/src/lsp/formatters.ts
 import { fileURLToPath } from "node:url";
 var DIAGNOSTIC_SEVERITY_FILTERS = {
   error: 1,
@@ -2189,7 +2397,7 @@ function formatApplyResult(result) {
 `);
 }
 
-// ../lsp-tools-mcp/dist/lsp/directory-diagnostics.js
+// ../lsp-core/src/lsp/directory-diagnostics.ts
 var SKIP_DIRECTORIES = new Set(["node_modules", ".git", "dist", "build", ".next", "out"]);
 function collectFilesWithExtension(dir, extension, maxFiles) {
   const files = [];
@@ -2238,7 +2446,7 @@ async function aggregateDiagnosticsForDirectory(directory, extension, severity, 
   if (serverResult.status !== "found") {
     throw new LspServerLookupError(formatServerLookupError(serverResult));
   }
-  const server = serverResult.server;
+  const server2 = serverResult.server;
   const allFiles = collectFilesWithExtension(absDir, extension, maxFiles + 1);
   const wasCapped = allFiles.length > maxFiles;
   const filesToProcess = allFiles.slice(0, maxFiles);
@@ -2255,7 +2463,7 @@ async function aggregateDiagnosticsForDirectory(directory, extension, severity, 
   const manager = getLspManager();
   const allDiagnostics = [];
   const fileErrors = [];
-  const client = await manager.getClient(root, server);
+  const client = await manager.getClient(root, server2);
   try {
     for (const file of filesToProcess) {
       try {
@@ -2273,7 +2481,7 @@ async function aggregateDiagnosticsForDirectory(directory, extension, severity, 
       }
     }
   } finally {
-    manager.releaseClient(root, server.id);
+    manager.releaseClient(root, server2.id);
   }
   const displayDiagnostics = allDiagnostics.slice(0, DEFAULT_MAX_DIAGNOSTICS);
   const wasDiagCapped = allDiagnostics.length > DEFAULT_MAX_DIAGNOSTICS;
@@ -2303,7 +2511,7 @@ async function aggregateDiagnosticsForDirectory(directory, extension, severity, 
 `);
 }
 
-// ../lsp-tools-mcp/dist/lsp/infer-extension.js
+// ../lsp-core/src/lsp/infer-extension.ts
 import { lstatSync as lstatSync2, readdirSync as readdirSync2 } from "node:fs";
 import { join as join7 } from "node:path";
 var SKIP_DIRECTORIES2 = new Set(["node_modules", ".git", "dist", "build", ".next", "out"]);
@@ -2359,11 +2567,265 @@ function inferExtensionFromDirectory(directory) {
   return maxExt || null;
 }
 
-// ../lsp-tools-mcp/dist/lsp/workspace-edit.js
-import { existsSync as existsSync7, readFileSync as readFileSync4, realpathSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute3, relative, resolve as resolve4 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+// ../lsp-core/src/lsp/utils.ts
+var RUST_SRC_REPAIR_MESSAGE = [
+  "rust-analyzer exited while loading Rust standard library sources.",
+  "",
+  "Repair rust-src for the active toolchain:",
+  "  rustup component remove rust-src",
+  "  rustup component add rust-src"
+];
 function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function formatKnownLspStartupFailure(error) {
+  if (!(error instanceof LspProcessExitedError))
+    return null;
+  if (error.serverId !== "rust")
+    return null;
+  const details = error.stderrTail ?? error.message;
+  const lowerDetails = details.toLowerCase();
+  const isRustSrcFailure = lowerDetails.includes("rust-src") && (lowerDetails.includes("failed to install component") || lowerDetails.includes("detected conflict") || lowerDetails.includes("can't load standard library") || lowerDetails.includes("try installing") || lowerDetails.includes("sysroot"));
+  if (!isRustSrcFailure)
+    return null;
+  return [...RUST_SRC_REPAIR_MESSAGE, "", "Original stderr tail:", details].join(`
+`);
+}
+function handleMissingDependencyError(error) {
+  const knownStartupFailure = formatKnownLspStartupFailure(error);
+  if (knownStartupFailure)
+    return knownStartupFailure;
+  const message = errorMessage(error);
+  return message.includes("NOT INSTALLED") || message.includes("No LSP server configured") ? message : null;
+}
+// ../lsp-core/src/missing-dependency-result.ts
+function missingDependencyResult(error, details) {
+  const message = handleMissingDependencyError(error);
+  if (!message)
+    return null;
+  return {
+    content: [{ type: "text", text: message }],
+    details: {
+      ...details,
+      error: message,
+      errorKind: "missing_dependency"
+    }
+  };
+}
+
+// ../lsp-core/src/tools/parameters.ts
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function requireString(params, key) {
+  const value = params[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Missing required string parameter '${key}'`);
+  }
+  return value;
+}
+function optionalString(params, key) {
+  const value = params[key];
+  return typeof value === "string" ? value : undefined;
+}
+function requireNumber(params, key) {
+  const value = params[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Missing required number parameter '${key}'`);
+  }
+  return value;
+}
+function optionalNumber(params, key) {
+  const value = params[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function optionalBoolean(params, key) {
+  const value = params[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+function severityFilter(params) {
+  const value = params["severity"];
+  if (value === "error" || value === "warning" || value === "information" || value === "hint" || value === "all") {
+    return value;
+  }
+  return "all";
+}
+function clientOptions(signal) {
+  return signal === undefined ? {} : { signal };
+}
+
+// ../lsp-core/src/tools/result.ts
+function text(text2, details, isError = false) {
+  return { content: [{ type: "text", text: text2 }], details, isError };
+}
+
+// ../lsp-core/src/tools/diagnostics.ts
+function asDiagnosticArray(result) {
+  if (!result)
+    return [];
+  if (Array.isArray(result))
+    return result;
+  return result.items ?? [];
+}
+async function executeLspDiagnostics(params, signal) {
+  const filePath = requireString(params, "filePath");
+  const severity = severityFilter(params);
+  try {
+    const absPath = resolve4(contextCwd(), filePath);
+    if (isDirectoryPath(absPath)) {
+      const extension = inferExtensionFromDirectory(absPath);
+      if (!extension) {
+        const message = `No supported source files found in directory: ${absPath}`;
+        const details3 = {
+          filePath,
+          severity,
+          mode: "directory",
+          diagnostics: [],
+          totalDiagnostics: 0,
+          truncated: false,
+          error: message,
+          errorKind: "no_files"
+        };
+        return text(message, details3);
+      }
+      const output2 = await aggregateDiagnosticsForDirectory(absPath, extension, severity);
+      const details2 = {
+        filePath,
+        severity,
+        mode: "directory",
+        diagnostics: [],
+        totalDiagnostics: 0,
+        truncated: false
+      };
+      return text(output2, details2);
+    }
+    const result = await withLspClient(filePath, async (client) => client.diagnostics(filePath), "diagnostics", clientOptions(signal));
+    const diagnostics = filterDiagnosticsBySeverity(asDiagnosticArray(result), severity);
+    const total = diagnostics.length;
+    const truncated = total > DEFAULT_MAX_DIAGNOSTICS;
+    const limited = truncated ? diagnostics.slice(0, DEFAULT_MAX_DIAGNOSTICS) : diagnostics;
+    const output = total === 0 ? "No diagnostics found" : [
+      ...truncated ? [`Found ${total} diagnostics (showing first ${DEFAULT_MAX_DIAGNOSTICS}):`] : [],
+      ...limited.map(formatDiagnostic)
+    ].join(`
+`);
+    const details = {
+      filePath,
+      severity,
+      mode: "file",
+      diagnostics: diagnostics.map((diagnostic) => ({ file: absPath, diagnostic })),
+      totalDiagnostics: total,
+      truncated
+    };
+    return text(output, details);
+  } catch (error) {
+    const missingDependency = missingDependencyResult(error, {
+      filePath,
+      severity,
+      mode: "file",
+      diagnostics: [],
+      totalDiagnostics: 0,
+      truncated: false
+    });
+    if (missingDependency)
+      return missingDependency;
+    throw error;
+  }
+}
+// ../lsp-core/src/tools/install-decision.ts
+async function executeLspInstallDecision(params) {
+  const serverId = requireString(params, "server_id");
+  const decision = params["decision"];
+  if (!isInstallDecision(decision)) {
+    return text(`Invalid decision '${String(decision)}'. Expected "declined" or "allowed".`, { serverId, errorKind: "invalid_decision" }, true);
+  }
+  const serverIds = [...new Set(getMergedServers().map((server2) => server2.id))];
+  if (!serverIds.includes(serverId)) {
+    const preview = serverIds.slice(0, 20).join(", ");
+    return text(`Unknown LSP server '${serverId}'. Known servers: ${preview}${serverIds.length > 20 ? "..." : ""}`, { serverId, errorKind: "unknown_server" }, true);
+  }
+  recordInstallDecision(serverId, decision);
+  return text(`Recorded install decision for '${serverId}': ${decision}. ${decisionFollowUp(decision)}`, {
+    serverId,
+    decision
+  });
+}
+function decisionFollowUp(decision) {
+  return decision === "declined" ? "Future LSP lookups for this server stay quiet; proceed without LSP." : "Future LSP lookups keep install instructions without asking the user.";
+}
+
+// ../lsp-core/src/tools/navigation.ts
+async function executeLspGotoDefinition(params, signal) {
+  const filePath = requireString(params, "filePath");
+  const line = requireNumber(params, "line");
+  const character = requireNumber(params, "character");
+  try {
+    const result = await withLspClient(filePath, async (client) => client.definition(filePath, line, character), "definition", clientOptions(signal));
+    const locations = !result ? [] : Array.isArray(result) ? result : [result];
+    const details = { filePath, line, character, locations };
+    if (locations.length === 0)
+      return text("No definition found", details);
+    return text(locations.map(formatLocation).join(`
+`), details);
+  } catch (error) {
+    const missingDependency = missingDependencyResult(error, {
+      filePath,
+      line,
+      character,
+      locations: []
+    });
+    if (missingDependency)
+      return missingDependency;
+    throw error;
+  }
+}
+async function executeLspFindReferences(params, signal) {
+  const filePath = requireString(params, "filePath");
+  const line = requireNumber(params, "line");
+  const character = requireNumber(params, "character");
+  const includeDeclaration = optionalBoolean(params, "includeDeclaration") ?? true;
+  try {
+    const result = await withLspClient(filePath, async (client) => client.references(filePath, line, character, includeDeclaration), "references", clientOptions(signal));
+    const references = Array.isArray(result) ? result : [];
+    const total = references.length;
+    const truncated = total > DEFAULT_MAX_REFERENCES;
+    const limited = truncated ? references.slice(0, DEFAULT_MAX_REFERENCES) : references;
+    const details = {
+      filePath,
+      line,
+      character,
+      references,
+      totalReferences: total,
+      truncated
+    };
+    if (total === 0)
+      return text("No references found", details);
+    const output = [
+      ...truncated ? [`Found ${total} references (showing first ${DEFAULT_MAX_REFERENCES}):`] : [],
+      ...limited.map(formatLocation)
+    ].join(`
+`);
+    return text(output, details);
+  } catch (error) {
+    const missingDependency = missingDependencyResult(error, {
+      filePath,
+      line,
+      character,
+      references: [],
+      totalReferences: 0,
+      truncated: false
+    });
+    if (missingDependency)
+      return missingDependency;
+    throw error;
+  }
+}
+
+// ../lsp-core/src/lsp/workspace-edit.ts
+import { existsSync as existsSync7, readFileSync as readFileSync4, realpathSync, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute3, relative, resolve as resolve5 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+function errorMessage2(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function isPathInsideWorkspace(filePath, workspaceRoot) {
@@ -2374,20 +2836,20 @@ function realpathForValidation(filePath) {
   if (existsSync7(filePath))
     return realpathSync(filePath);
   const parent = dirname3(filePath);
-  return resolve4(realpathSync(parent), relative(parent, filePath));
+  return resolve5(realpathSync(parent), relative(parent, filePath));
 }
 function uriToWorkspacePath(uri, workspaceRoot) {
   let filePath;
   try {
     filePath = fileURLToPath2(uri);
   } catch (error) {
-    return { success: false, error: `non-file URI ${uri}: ${errorMessage(error)}` };
+    return { success: false, error: `non-file URI ${uri}: ${errorMessage2(error)}` };
   }
   let validatedPath;
   try {
     validatedPath = realpathForValidation(filePath);
   } catch (error) {
-    return { success: false, error: `${filePath}: ${errorMessage(error)}` };
+    return { success: false, error: `${filePath}: ${errorMessage2(error)}` };
   }
   if (!isPathInsideWorkspace(validatedPath, workspaceRoot)) {
     return { success: false, error: `${filePath}: outside workspace ${workspaceRoot}` };
@@ -2527,120 +2989,72 @@ function applyWorkspaceEdit(edit, options = {}) {
   return result;
 }
 
-// ../lsp-tools-mcp/dist/lsp/startup-failure.js
-var RUST_SRC_REPAIR_MESSAGE = [
-  "rust-analyzer exited while loading Rust standard library sources.",
-  "",
-  "Repair rust-src for the active toolchain:",
-  "  rustup component remove rust-src",
-  "  rustup component add rust-src"
-];
-function errorMessage2(error) {
-  return error instanceof Error ? error.message : String(error);
+// ../lsp-core/src/tools/rename.ts
+async function executeLspPrepareRename(params, signal) {
+  const filePath = requireString(params, "filePath");
+  const line = requireNumber(params, "line");
+  const character = requireNumber(params, "character");
+  try {
+    const result = await withLspClient(filePath, async (client) => client.prepareRename(filePath, line, character), "prepareRename", clientOptions(signal));
+    const details = { filePath, line, character, result };
+    return text(formatPrepareRenameResult(result), details);
+  } catch (error) {
+    const missingDependency = missingDependencyResult(error, {
+      filePath,
+      line,
+      character,
+      result: null
+    });
+    if (missingDependency)
+      return missingDependency;
+    throw error;
+  }
 }
-function formatKnownLspStartupFailure(error) {
-  if (!(error instanceof LspProcessExitedError))
-    return null;
-  if (error.serverId !== "rust")
-    return null;
-  const details = error.stderrTail ?? error.message;
-  const lowerDetails = details.toLowerCase();
-  const isRustSrcFailure = lowerDetails.includes("rust-src") && (lowerDetails.includes("failed to install component") || lowerDetails.includes("detected conflict") || lowerDetails.includes("can't load standard library") || lowerDetails.includes("try installing") || lowerDetails.includes("sysroot"));
-  if (!isRustSrcFailure)
-    return null;
-  return [...RUST_SRC_REPAIR_MESSAGE, "", "Original stderr tail:", details].join(`
-`);
-}
-function handleMissingDependencyError(error) {
-  const knownStartupFailure = formatKnownLspStartupFailure(error);
-  if (knownStartupFailure)
-    return knownStartupFailure;
-  const message = errorMessage2(error);
-  return message.includes("NOT INSTALLED") || message.includes("No LSP server configured") ? message : null;
+async function executeLspRename(params, signal) {
+  const filePath = requireString(params, "filePath");
+  const line = requireNumber(params, "line");
+  const character = requireNumber(params, "character");
+  const newName = requireString(params, "newName");
+  try {
+    const edit = await withLspClient(filePath, async (client, workspaceRoot) => ({
+      edit: await client.rename(filePath, line, character, newName),
+      workspaceRoot
+    }), "rename", clientOptions(signal));
+    const apply = applyWorkspaceEdit(edit.edit, { workspaceRoot: edit.workspaceRoot });
+    const details = { filePath, line, character, newName, apply, edit: edit.edit };
+    return text(formatApplyResult(apply), details, !apply.success);
+  } catch (error) {
+    const missingDependency = missingDependencyResult(error, {
+      filePath,
+      line,
+      character,
+      newName,
+      apply: null,
+      edit: null
+    });
+    if (missingDependency)
+      return missingDependency;
+    throw error;
+  }
 }
 
-// ../lsp-tools-mcp/dist/missing-dependency-result.js
-function missingDependencyResult(error, details) {
-  const message = handleMissingDependencyError(error);
-  if (!message)
-    return null;
+// ../lsp-core/src/tools/schema.ts
+function objectSchema(properties, required = []) {
   return {
-    content: [{ type: "text", text: message }],
-    details: {
-      ...details,
-      error: message,
-      errorKind: "missing_dependency"
-    }
+    type: "object",
+    properties,
+    required
   };
 }
 
-// ../lsp-tools-mcp/dist/tools.js
-var objectSchema = (properties, required = []) => ({
-  type: "object",
-  properties,
-  required
-});
-function text(text2, details, isError = false) {
-  return { content: [{ type: "text", text: text2 }], details, isError };
-}
-function isRecord4(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function requireString(params, key) {
-  const value = params[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Missing required string parameter '${key}'`);
-  }
-  return value;
-}
-function optionalString(params, key) {
-  const value = params[key];
-  return typeof value === "string" ? value : undefined;
-}
-function requireNumber(params, key) {
-  const value = params[key];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Missing required number parameter '${key}'`);
-  }
-  return value;
-}
-function optionalNumber(params, key) {
-  const value = params[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-function optionalBoolean(params, key) {
-  const value = params[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-function isSeverityFilter(value) {
-  return value === "error" || value === "warning" || value === "information" || value === "hint" || value === "all";
-}
-function severityFilter(params) {
-  const value = params["severity"];
-  if (isSeverityFilter(value))
-    return value;
-  return "all";
-}
-function clientOptions(signal) {
-  return signal === undefined ? {} : { signal };
-}
-function asDiagnosticArray(result) {
-  if (!result)
-    return [];
-  if (Array.isArray(result))
-    return result;
-  return result.items ?? [];
-}
-function isDocumentSymbol(symbol) {
-  return "range" in symbol;
-}
+// ../lsp-core/src/tools/status.ts
 async function executeLspStatus() {
   const servers = getAllServers();
   const snapshots = getLspManager().getSnapshot();
-  const installed = servers.filter((server) => server.installed && !server.disabled);
-  const configuredLines = servers.map((server) => {
-    const state = server.disabled ? "disabled" : server.installed ? "installed" : "missing";
-    return `- ${server.id}: ${state}; source=${server.source}; extensions=${server.extensions.join(", ")}`;
+  const installed = servers.filter((server2) => server2.installed && !server2.disabled);
+  const configuredLines = servers.map((server2) => {
+    const state = server2.disabled ? "disabled" : server2.installed ? "installed" : "missing";
+    return `- ${server2.id}: ${state}; source=${server2.source}; extensions=${server2.extensions.join(", ")}`;
   });
   const activeLines = snapshots.map((snapshot) => {
     const state = snapshot.alive ? snapshot.isInitializing ? "initializing" : "alive" : "dead";
@@ -2658,135 +3072,10 @@ async function executeLspStatus() {
   return text(lines.join(`
 `), { servers, snapshots });
 }
-async function executeLspDiagnostics(params, signal) {
-  const filePath = requireString(params, "filePath");
-  const severity = severityFilter(params);
-  try {
-    const absPath = resolve5(contextCwd(), filePath);
-    if (isDirectoryPath(absPath)) {
-      const extension = inferExtensionFromDirectory(absPath);
-      if (!extension) {
-        const message = `No supported source files found in directory: ${absPath}`;
-        const details3 = {
-          filePath,
-          severity,
-          mode: "directory",
-          diagnostics: [],
-          totalDiagnostics: 0,
-          truncated: false,
-          error: message,
-          errorKind: "no_files"
-        };
-        return text(message, details3);
-      }
-      const output2 = await aggregateDiagnosticsForDirectory(absPath, extension, severity);
-      const details2 = {
-        filePath,
-        severity,
-        mode: "directory",
-        diagnostics: [],
-        totalDiagnostics: 0,
-        truncated: false
-      };
-      return text(output2, details2);
-    }
-    const result = await withLspClient(filePath, async (client) => client.diagnostics(filePath), "diagnostics", clientOptions(signal));
-    const diagnostics = filterDiagnosticsBySeverity(asDiagnosticArray(result), severity);
-    const total = diagnostics.length;
-    const truncated = total > DEFAULT_MAX_DIAGNOSTICS;
-    const limited = truncated ? diagnostics.slice(0, DEFAULT_MAX_DIAGNOSTICS) : diagnostics;
-    const output = total === 0 ? "No diagnostics found" : [
-      ...truncated ? [`Found ${total} diagnostics (showing first ${DEFAULT_MAX_DIAGNOSTICS}):`] : [],
-      ...limited.map(formatDiagnostic)
-    ].join(`
-`);
-    const details = {
-      filePath,
-      severity,
-      mode: "file",
-      diagnostics: diagnostics.map((diagnostic) => ({ file: absPath, diagnostic })),
-      totalDiagnostics: total,
-      truncated
-    };
-    return text(output, details);
-  } catch (error) {
-    const missingDependency = missingDependencyResult(error, {
-      filePath,
-      severity,
-      mode: "file",
-      diagnostics: [],
-      totalDiagnostics: 0,
-      truncated: false
-    });
-    if (missingDependency)
-      return missingDependency;
-    throw error;
-  }
-}
-async function executeLspGotoDefinition(params, signal) {
-  const filePath = requireString(params, "filePath");
-  const line = requireNumber(params, "line");
-  const character = requireNumber(params, "character");
-  try {
-    const result = await withLspClient(filePath, async (client) => client.definition(filePath, line, character), "definition", clientOptions(signal));
-    const locations = !result ? [] : Array.isArray(result) ? result : [result];
-    const details = { filePath, line, character, locations };
-    if (locations.length === 0)
-      return text("No definition found", details);
-    return text(locations.map(formatLocation).join(`
-`), details);
-  } catch (error) {
-    const missingDependency = missingDependencyResult(error, {
-      filePath,
-      line,
-      character,
-      locations: []
-    });
-    if (missingDependency)
-      return missingDependency;
-    throw error;
-  }
-}
-async function executeLspFindReferences(params, signal) {
-  const filePath = requireString(params, "filePath");
-  const line = requireNumber(params, "line");
-  const character = requireNumber(params, "character");
-  const includeDeclaration = optionalBoolean(params, "includeDeclaration") ?? true;
-  try {
-    const result = await withLspClient(filePath, async (client) => client.references(filePath, line, character, includeDeclaration), "references", clientOptions(signal));
-    const references = Array.isArray(result) ? result : [];
-    const total = references.length;
-    const truncated = total > DEFAULT_MAX_REFERENCES;
-    const limited = truncated ? references.slice(0, DEFAULT_MAX_REFERENCES) : references;
-    const details = {
-      filePath,
-      line,
-      character,
-      references,
-      totalReferences: total,
-      truncated
-    };
-    if (total === 0)
-      return text("No references found", details);
-    const output = [
-      ...truncated ? [`Found ${total} references (showing first ${DEFAULT_MAX_REFERENCES}):`] : [],
-      ...limited.map(formatLocation)
-    ].join(`
-`);
-    return text(output, details);
-  } catch (error) {
-    const missingDependency = missingDependencyResult(error, {
-      filePath,
-      line,
-      character,
-      references: [],
-      totalReferences: 0,
-      truncated: false
-    });
-    if (missingDependency)
-      return missingDependency;
-    throw error;
-  }
+
+// ../lsp-core/src/tools/symbols.ts
+function isDocumentSymbol(symbol) {
+  return "range" in symbol;
 }
 async function executeLspSymbols(params, signal) {
   const filePath = requireString(params, "filePath");
@@ -2854,85 +3143,8 @@ function formatSymbolsResult(filePath, scope, symbols, limit, query) {
   return text(lines.join(`
 `), details);
 }
-async function executeLspPrepareRename(params, signal) {
-  const filePath = requireString(params, "filePath");
-  const line = requireNumber(params, "line");
-  const character = requireNumber(params, "character");
-  try {
-    const result = await withLspClient(filePath, async (client) => client.prepareRename(filePath, line, character), "prepareRename", clientOptions(signal));
-    const details = { filePath, line, character, result };
-    return text(formatPrepareRenameResult(result), details);
-  } catch (error) {
-    const missingDependency = missingDependencyResult(error, {
-      filePath,
-      line,
-      character,
-      result: null
-    });
-    if (missingDependency)
-      return missingDependency;
-    throw error;
-  }
-}
-async function executeLspRename(params, signal) {
-  const filePath = requireString(params, "filePath");
-  const line = requireNumber(params, "line");
-  const character = requireNumber(params, "character");
-  const newName = requireString(params, "newName");
-  try {
-    const edit = await withLspClient(filePath, async (client, workspaceRoot) => ({
-      edit: await client.rename(filePath, line, character, newName),
-      workspaceRoot
-    }), "rename", clientOptions(signal));
-    const apply = applyWorkspaceEdit(edit.edit, { workspaceRoot: edit.workspaceRoot });
-    const details = { filePath, line, character, newName, apply, edit: edit.edit };
-    return text(formatApplyResult(apply), details, !apply.success);
-  } catch (error) {
-    const missingDependency = missingDependencyResult(error, {
-      filePath,
-      line,
-      character,
-      newName,
-      apply: null,
-      edit: null
-    });
-    if (missingDependency)
-      return missingDependency;
-    throw error;
-  }
-}
-async function executeLspInstallDecision(params) {
-  const serverId = requireString(params, "server_id");
-  const decision = params["decision"];
-  if (!isInstallDecision(decision)) {
-    return text(`Invalid decision '${String(decision)}'. Expected "declined" or "allowed".`, { serverId, errorKind: "invalid_decision" }, true);
-  }
-  const serverIds = [...new Set(getMergedServers().map((server) => server.id))];
-  if (!serverIds.includes(serverId)) {
-    const preview = serverIds.slice(0, 20).join(", ");
-    return text(`Unknown LSP server '${serverId}'. Known servers: ${preview}${serverIds.length > 20 ? "..." : ""}`, { serverId, errorKind: "unknown_server" }, true);
-  }
-  recordInstallDecision(serverId, decision);
-  return text(`Recorded install decision for '${serverId}': ${decision}. ${decisionFollowUp(decision)}`, {
-    serverId,
-    decision
-  });
-}
-function decisionFollowUp(decision) {
-  return decision === "declined" ? "Future LSP lookups for this server stay quiet; proceed without LSP." : "Future LSP lookups keep install instructions without asking the user.";
-}
-async function executeLspTool(name, params, signal) {
-  const tool = LSP_MCP_TOOLS.find((candidate) => matchesToolName(candidate, name));
-  if (!tool)
-    throw new Error(`Unknown LSP tool: ${name}`);
-  return tool.execute(params, signal);
-}
-function matchesToolName(tool, name) {
-  return tool.name === name || (tool.aliases?.includes(name) ?? false);
-}
-function coerceToolArguments(value) {
-  return isRecord4(value) ? value : {};
-}
+
+// ../lsp-core/src/tools/definitions.ts
 var LSP_MCP_TOOLS = [
   {
     name: "status",
@@ -3043,12 +3255,24 @@ var LSP_MCP_TOOLS = [
     execute: executeLspInstallDecision
   }
 ];
-
-// ../lsp-tools-mcp/dist/mcp.js
+// ../lsp-core/src/tools/runtime.ts
+async function executeLspTool(name, params, signal) {
+  const tool = LSP_MCP_TOOLS.find((candidate) => matchesToolName(candidate, name));
+  if (!tool)
+    throw new Error(`Unknown LSP tool: ${name}`);
+  return tool.execute(params, signal);
+}
+function matchesToolName(tool, name) {
+  return tool.name === name || (tool.aliases?.includes(name) ?? false);
+}
+function coerceToolArguments(value) {
+  return isRecord4(value) ? value : {};
+}
+// ../lsp-core/src/mcp.ts
 var SERVER_NAME = "lsp";
 var SERVER_VERSION = "0.1.0";
 async function handleLspMcpRequest(input) {
-  if (!isRecord5(input)) {
+  if (!isPlainRecord(input)) {
     return errorResponse(null, -32600, "Invalid Request");
   }
   const id = jsonRpcId(input["id"]);
@@ -3074,7 +3298,7 @@ async function handleLspMcpRequest(input) {
   return errorResponse(id, -32601, `Method not found: ${String(method)}`);
 }
 async function handleToolCall(id, params) {
-  if (!isRecord5(params) || typeof params["name"] !== "string") {
+  if (!isPlainRecord(params) || typeof params["name"] !== "string") {
     return errorResponse(id, -32602, "tools/call requires params.name");
   }
   try {
@@ -3099,25 +3323,10 @@ function describeTool(tool) {
     inputSchema: tool.inputSchema
   };
 }
-function successResponse(id, result) {
-  return { jsonrpc: "2.0", id, result };
-}
-function errorResponse(id, code, message, data) {
-  return { jsonrpc: "2.0", id, error: data === undefined ? { code, message } : { code, message, data } };
-}
 function requestedProtocolVersion(params) {
-  if (!isRecord5(params) || typeof params["protocolVersion"] !== "string")
+  if (!isPlainRecord(params) || typeof params["protocolVersion"] !== "string")
     return "2024-11-05";
   return params["protocolVersion"];
-}
-function jsonRpcId(value) {
-  return typeof value === "string" || typeof value === "number" || value === null ? value : null;
-}
-function isRecord5(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function messageFromError(error) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 // src/daemon-client.ts
@@ -3333,13 +3542,13 @@ function resolveSocketPath(dir, version) {
 // src/request-routing.ts
 var CONTEXT_KEY = "_context";
 function extractRequestContext(raw) {
-  if (!isRecord6(raw) || raw["method"] !== "tools/call")
+  if (!isRecord5(raw) || raw["method"] !== "tools/call")
     return { input: raw, context: undefined };
   const params = raw["params"];
-  if (!isRecord6(params))
+  if (!isRecord5(params))
     return { input: raw, context: undefined };
   const args = params["arguments"];
-  if (!isRecord6(args))
+  if (!isRecord5(args))
     return { input: raw, context: undefined };
   const context = parseContext(args[CONTEXT_KEY]);
   if (!context)
@@ -3356,7 +3565,7 @@ function handleDaemonMessage(raw) {
   return handleLspMcpRequest(input);
 }
 function parseContext(value) {
-  if (!isRecord6(value))
+  if (!isRecord5(value))
     return;
   const context = {};
   const cwd = value["cwd"];
@@ -3367,11 +3576,11 @@ function parseContext(value) {
     context.env = env;
   return context.cwd === undefined && context.env === undefined ? undefined : context;
 }
-function isRecord6(value) {
+function isRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isStringRecord2(value) {
-  return isRecord6(value) && Object.values(value).every((item) => typeof item === "string");
+  return isRecord5(value) && Object.values(value).every((item) => typeof item === "string");
 }
 
 // src/socket-jsonrpc.ts
@@ -3498,10 +3707,10 @@ function sendToolCall(socketPath, name, args, timeoutMs) {
   });
 }
 function toToolResult(message) {
-  if (!isRecord7(message) || message["id"] !== REQUEST_ID)
+  if (!isRecord6(message) || message["id"] !== REQUEST_ID)
     return null;
   const result = message["result"];
-  if (!isRecord7(result) || !Array.isArray(result["content"]))
+  if (!isRecord6(result) || !Array.isArray(result["content"]))
     return null;
   return {
     content: result["content"],
@@ -3509,7 +3718,7 @@ function toToolResult(message) {
     details: result["details"]
   };
 }
-function isRecord7(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function errorText(error) {
@@ -3523,56 +3732,32 @@ async function runMcpStdioProxy(options = {}) {
   const paths = options.paths ?? daemonPaths();
   const context = options.context ?? currentRequestContext();
   const callOptions = { paths, context, ...options.ensure ? { ensure: options.ensure } : {} };
-  const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
-  for await (const line of lines) {
-    if (!line.trim())
-      continue;
-    try {
-      const response = await handleLine(line, callOptions);
-      if (response)
-        output.write(`${JSON.stringify(response)}
-`);
-    } catch (error) {
+  await runJsonRpcStdioServer({
+    input,
+    output,
+    handler: handleProxyRequest,
+    handlerOptions: callOptions,
+    onHandlerError: (error) => {
       process.stderr.write(`[lsp-daemon] proxy error: ${error instanceof Error ? error.message : String(error)}
 `);
     }
-  }
+  });
 }
-async function handleLine(line, callOptions) {
-  let parsed;
-  try {
-    parsed = JSON.parse(line);
-  } catch (error) {
-    return parseErrorResponse(error);
-  }
+async function handleProxyRequest(parsed, callOptions) {
   const toolCall = asToolCall(parsed);
   if (!toolCall)
     return handleLspMcpRequest(parsed);
   const result = await callToolViaDaemon(toolCall.name, toolCall.args, callOptions);
-  return {
-    jsonrpc: "2.0",
-    id: toolCall.id,
-    result: { content: result.content, isError: result.isError ?? false, details: result.details }
-  };
+  return successResponse(toolCall.id, { content: result.content, isError: result.isError ?? false, details: result.details });
 }
 function asToolCall(parsed) {
-  if (!isRecord8(parsed) || parsed["method"] !== "tools/call")
+  if (!isPlainRecord(parsed) || parsed["method"] !== "tools/call")
     return null;
   const params = parsed["params"];
-  if (!isRecord8(params) || typeof params["name"] !== "string")
+  if (!isPlainRecord(params) || typeof params["name"] !== "string")
     return null;
   const args = params["arguments"];
-  return { id: jsonRpcId2(parsed["id"]), name: params["name"], args: isRecord8(args) ? args : {} };
-}
-function jsonRpcId2(value) {
-  return typeof value === "string" || typeof value === "number" || value === null ? value : null;
-}
-function parseErrorResponse(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  return { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error", data: message } };
-}
-function isRecord8(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return { id: jsonRpcId(parsed["id"]), name: params["name"], args: isPlainRecord(args) ? args : {} };
 }
 
 // src/daemon-server.ts
@@ -3591,7 +3776,7 @@ async function startDaemonServer(paths, options = {}) {
   const touch = () => {
     lastActiveAt = Date.now();
   };
-  const server = createServer2((socket) => {
+  const server2 = createServer2((socket) => {
     connections.add(socket);
     touch();
     const decoder = createLineDecoder((message) => {
@@ -3605,9 +3790,9 @@ async function startDaemonServer(paths, options = {}) {
       touch();
     });
   });
-  server.on("error", (error) => logServerError(error));
+  server2.on("error", (error) => logServerError(error));
   const endpointPath = join9(paths.dir, "daemon.endpoint");
-  await listen(server, paths.socket);
+  await listen(server2, paths.socket);
   writeFileSync3(paths.pid, `${process.pid}
 `);
   writeFileSync3(endpointPath, paths.socket);
@@ -3620,7 +3805,7 @@ async function startDaemonServer(paths, options = {}) {
     for (const socket of connections)
       socket.destroy();
     connections.clear();
-    await closeServer(server);
+    await closeServer(server2);
     unlinkQuietly(paths.socket);
     unlinkQuietly(paths.pid);
     unlinkQuietly(endpointPath);
@@ -3643,7 +3828,7 @@ async function startDaemonServer(paths, options = {}) {
   }, idleCheckIntervalMs);
   idleTimer.unref();
   installSignalHandlers(close);
-  return { server, close };
+  return { server: server2, close };
 }
 async function respond(socket, message) {
   try {
@@ -3654,18 +3839,18 @@ async function respond(socket, message) {
     logServerError(error);
   }
 }
-function listen(server, socketPath) {
+function listen(server2, socketPath) {
   return new Promise((resolve6, reject) => {
     const onError = (error) => reject(error);
-    server.once("error", onError);
-    server.listen(socketPath, () => {
-      server.removeListener("error", onError);
+    server2.once("error", onError);
+    server2.listen(socketPath, () => {
+      server2.removeListener("error", onError);
       resolve6();
     });
   });
 }
-function closeServer(server) {
-  return new Promise((resolve6) => server.close(() => resolve6()));
+function closeServer(server2) {
+  return new Promise((resolve6) => server2.close(() => resolve6()));
 }
 function installSignalHandlers(close) {
   const handler = () => {

@@ -1,4 +1,4 @@
-import type { ToolExecutionResult } from "@code-yeongyu/lsp-tools-mcp/dist/tools.js";
+import type { ToolExecutionResult } from "@oh-my-opencode/lsp-core/tools";
 import { type DaemonPaths } from "./paths.js";
 export declare class DaemonRequestError extends Error {
     readonly requestWritten: boolean;

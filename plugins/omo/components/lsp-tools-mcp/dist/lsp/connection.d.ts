@@ -1,4 +1,1 @@
-import { LspClientTransport } from "./transport.js";
-export declare class LspClientConnection extends LspClientTransport {
-    initialize(): Promise<void>;
-}
+export * from "@oh-my-opencode/lsp-core/lsp/connection";

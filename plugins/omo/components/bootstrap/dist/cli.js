@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-// src/cli.ts
+// components/bootstrap/src/cli.ts
 import { realpathSync } from "node:fs";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
 
-// src/download.ts
+// components/bootstrap/src/download.ts
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, rename, rm } from "node:fs/promises";
@@ -12,44 +12,42 @@ import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-var DownloadError = class extends Error {
+
+class DownloadError extends Error {
   code;
   constructor(code, message) {
     super(message);
     this.name = "DownloadError";
     this.code = code;
   }
-};
-var ChecksumMismatchError = class extends DownloadError {
+}
+
+class ChecksumMismatchError extends DownloadError {
   expectedSha256;
   actualSha256;
   constructor(options) {
-    super(
-      "checksum-mismatch",
-      `Checksum mismatch for ${options.url}: expected sha256 ${options.expectedSha256} but downloaded sha256 ${options.actualSha256}; deleted the partial download.`
-    );
+    super("checksum-mismatch", `Checksum mismatch for ${options.url}: expected sha256 ${options.expectedSha256} but downloaded sha256 ${options.actualSha256}; deleted the partial download.`);
     this.name = "ChecksumMismatchError";
     this.expectedSha256 = options.expectedSha256;
     this.actualSha256 = options.actualSha256;
   }
-};
-var UnsupportedPlatformError = class extends DownloadError {
+}
+
+class UnsupportedPlatformError extends DownloadError {
   manifestName;
   platformKey;
   constructor(options) {
-    super(
-      "unsupported-platform",
-      `Manifest "${options.manifestName}" has no asset for unsupported platform "${options.platformKey}" (available: ${options.availablePlatforms.join(", ")}).`
-    );
+    super("unsupported-platform", `Manifest "${options.manifestName}" has no asset for unsupported platform "${options.platformKey}" (available: ${options.availablePlatforms.join(", ")}).`);
     this.name = "UnsupportedPlatformError";
     this.manifestName = options.manifestName;
     this.platformKey = options.platformKey;
   }
-};
+}
 var PROXY_ENV_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 function proxyLimitationNote(env) {
   const configuredKey = PROXY_ENV_KEYS.find((key) => (env[key] ?? "").trim().length > 0);
-  if (configuredKey === void 0) return "";
+  if (configuredKey === undefined)
+    return "";
   return ` Note: ${configuredKey} is set, but the bootstrap downloader does not tunnel through HTTP(S) proxies in v1; the download was attempted directly.`;
 }
 function describeFailure(error) {
@@ -61,17 +59,13 @@ async function writeBodyToFile(body, tempPath) {
     await pipeline(Readable.from([]), createWriteStream(tempPath));
     return hash.digest("hex");
   }
-  await pipeline(
-    Readable.fromWeb(body),
-    async function* hashChunks(source) {
-      for await (const chunk of source) {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        hash.update(buffer);
-        yield buffer;
-      }
-    },
-    createWriteStream(tempPath)
-  );
+  await pipeline(Readable.fromWeb(body), async function* hashChunks(source) {
+    for await (const chunk of source) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      hash.update(buffer);
+      yield buffer;
+    }
+  }, createWriteStream(tempPath));
   return hash.digest("hex");
 }
 async function downloadChecksummedAsset(options) {
@@ -84,26 +78,17 @@ async function downloadChecksummedAsset(options) {
   try {
     response = await fetchImpl(options.url);
   } catch (error) {
-    throw new DownloadError(
-      "download-failed",
-      `Download failed for ${options.url}: ${describeFailure(error)}.${proxyLimitationNote(env)}`
-    );
+    throw new DownloadError("download-failed", `Download failed for ${options.url}: ${describeFailure(error)}.${proxyLimitationNote(env)}`);
   }
   if (!response.ok) {
-    throw new DownloadError(
-      "download-failed",
-      `Download failed for ${options.url}: HTTP ${response.status}.${proxyLimitationNote(env)}`
-    );
+    throw new DownloadError("download-failed", `Download failed for ${options.url}: HTTP ${response.status}.${proxyLimitationNote(env)}`);
   }
   let actualSha256;
   try {
     actualSha256 = await writeBodyToFile(response.body, tempPath);
   } catch (error) {
     await rm(tempPath, { force: true });
-    throw new DownloadError(
-      "download-failed",
-      `Download failed for ${options.url} while writing the response body: ${describeFailure(error)}.${proxyLimitationNote(env)}`
-    );
+    throw new DownloadError("download-failed", `Download failed for ${options.url} while writing the response body: ${describeFailure(error)}.${proxyLimitationNote(env)}`);
   }
   if (actualSha256 !== expectedSha256) {
     await rm(tempPath, { force: true });
@@ -143,7 +128,7 @@ async function loadAssetManifest(manifestName, manifestsDir) {
 async function downloadFromManifest(options) {
   const manifest = await loadAssetManifest(options.manifestName, options.manifestsDir);
   const asset = manifest.platforms[options.platformKey];
-  if (asset === void 0) {
+  if (asset === undefined) {
     throw new UnsupportedPlatformError({
       availablePlatforms: Object.keys(manifest.platforms),
       manifestName: options.manifestName,
@@ -155,28 +140,30 @@ async function downloadFromManifest(options) {
     destination,
     sha256: asset.sha256,
     url: asset.url,
-    ...options.fetchImpl === void 0 ? {} : { fetchImpl: options.fetchImpl },
-    ...options.env === void 0 ? {} : { env: options.env }
+    ...options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl },
+    ...options.env === undefined ? {} : { env: options.env }
   });
 }
 
-// src/hook.ts
-import { spawn } from "node:child_process";
+// components/bootstrap/src/hook.ts
+import { spawn as spawn2 } from "node:child_process";
 import { stat as stat5 } from "node:fs/promises";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
-// ../../scripts/auto-update-state.mjs
+// scripts/auto-update-state.mjs
 import { appendFile, mkdir as mkdir2, open, readFile as readFile2, rm as rm2, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname as dirname2, join as join2 } from "node:path";
-var DEFAULT_LOCK_STALE_MS = 10 * 60 * 1e3;
+var DEFAULT_LOCK_STALE_MS = 10 * 60 * 1000;
 function resolveStatePath(env) {
-  if (env.LAZYCODEX_AUTO_UPDATE_STATE_PATH?.trim()) return env.LAZYCODEX_AUTO_UPDATE_STATE_PATH;
+  if (env.LAZYCODEX_AUTO_UPDATE_STATE_PATH?.trim())
+    return env.LAZYCODEX_AUTO_UPDATE_STATE_PATH;
   const dataRoot = env.PLUGIN_DATA?.trim() || join2(homedir(), ".local", "share", "lazycodex");
   return join2(dataRoot, "auto-update.json");
 }
 function resolveLockPath(env, statePath) {
-  if (env.LAZYCODEX_AUTO_UPDATE_LOCK_PATH?.trim()) return env.LAZYCODEX_AUTO_UPDATE_LOCK_PATH;
+  if (env.LAZYCODEX_AUTO_UPDATE_LOCK_PATH?.trim())
+    return env.LAZYCODEX_AUTO_UPDATE_LOCK_PATH;
   return `${statePath}.lock`;
 }
 async function acquireLock(lockPath, now, staleMs = DEFAULT_LOCK_STALE_MS) {
@@ -190,8 +177,10 @@ async function acquireLock(lockPath, now, staleMs = DEFAULT_LOCK_STALE_MS) {
       release: () => rm2(lockPath, { force: true })
     };
   } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-    if (!await removeStaleLock(lockPath, now, staleMs)) return null;
+    if (!(error instanceof Error && ("code" in error) && error.code === "EEXIST"))
+      throw error;
+    if (!await removeStaleLock(lockPath, now, staleMs))
+      return null;
     return acquireLock(lockPath, now, 0);
   }
 }
@@ -201,7 +190,8 @@ async function readState(statePath) {
     const parsed = JSON.parse(raw);
     return typeof parsed === "object" && parsed !== null ? parsed : {};
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return {};
     return {};
   }
 }
@@ -211,19 +201,22 @@ async function writeState(statePath, state) {
 `);
 }
 async function removeStaleLock(lockPath, now, staleMs) {
-  if (staleMs <= 0) return false;
+  if (staleMs <= 0)
+    return false;
   try {
     const lockStat = await stat(lockPath);
-    if (now - lockStat.mtimeMs < staleMs) return false;
+    if (now - lockStat.mtimeMs < staleMs)
+      return false;
     await rm2(lockPath, { force: true });
     return true;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return true;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return true;
     throw error;
   }
 }
 
-// src/environment.ts
+// components/bootstrap/src/environment.ts
 import { stat as stat2 } from "node:fs/promises";
 import { readFile as readFile3 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
@@ -236,11 +229,11 @@ async function detectInstallFlowDetailed(options) {
   const snapshotPresent = await isFile(join3(options.pluginRoot, INSTALL_SNAPSHOT_FILENAME));
   const snapshotSignal = snapshotPresent ? "npx-local" : "marketplace";
   const snapshotReason = snapshotPresent ? `${INSTALL_SNAPSHOT_FILENAME} present at plugin root (written only by the npx installer)` : `${INSTALL_SNAPSHOT_FILENAME} absent from plugin root`;
-  const scan = options.configToml === void 0 ? { kind: "absent" } : scanMarketplaceSource(options.configToml, marketplaceName);
+  const scan = options.configToml === undefined ? { kind: "absent" } : scanMarketplaceSource(options.configToml, marketplaceName);
   if (scan.kind === "absent") {
     return {
-      configSignal: void 0,
-      configSource: void 0,
+      configSignal: undefined,
+      configSource: undefined,
       flow: snapshotSignal,
       reason: `${snapshotReason}; no [marketplaces.${marketplaceName}] source to cross-check`,
       snapshotPresent
@@ -249,7 +242,7 @@ async function detectInstallFlowDetailed(options) {
   if (scan.kind === "unparsable") {
     return {
       configSignal: "unparsable",
-      configSource: void 0,
+      configSource: undefined,
       flow: "unknown",
       reason: `${snapshotReason}; [marketplaces.${marketplaceName}] source value is unparsable`,
       snapshotPresent
@@ -290,25 +283,26 @@ async function detectInstallFlowFromEnvironment(options) {
   const configToml = await readOptionalFile(join3(home.path, "config.toml"));
   return detectInstallFlowDetailed({
     pluginRoot: options.pluginRoot,
-    ...configToml === void 0 ? {} : { configToml },
-    ...options.marketplaceName === void 0 ? {} : { marketplaceName: options.marketplaceName }
+    ...configToml === undefined ? {} : { configToml },
+    ...options.marketplaceName === undefined ? {} : { marketplaceName: options.marketplaceName }
   });
 }
 async function detectInstallFlowForTest(pluginRoot) {
   const home = await resolveCodexHome({ env: {}, pluginRoot });
-  const configToml = home.source === "walk-up" ? await readOptionalFile(join3(home.path, "config.toml")) : void 0;
-  return detectInstallFlow({ pluginRoot, ...configToml === void 0 ? {} : { configToml } });
+  const configToml = home.source === "walk-up" ? await readOptionalFile(join3(home.path, "config.toml")) : undefined;
+  return detectInstallFlow({ pluginRoot, ...configToml === undefined ? {} : { configToml } });
 }
 async function resolveCodexHome(options) {
   const envHome = options.env["CODEX_HOME"]?.trim();
-  if (envHome !== void 0 && envHome.length > 0) {
+  if (envHome !== undefined && envHome.length > 0) {
     return { path: resolve(envHome), source: "env" };
   }
-  if (options.pluginRoot !== void 0) {
+  if (options.pluginRoot !== undefined) {
     let current = resolve(options.pluginRoot);
-    for (let level = 0; level < MAX_CODEX_HOME_WALK_UP_LEVELS; level += 1) {
+    for (let level = 0;level < MAX_CODEX_HOME_WALK_UP_LEVELS; level += 1) {
       const parent = dirname3(current);
-      if (parent === current) break;
+      if (parent === current)
+        break;
       current = parent;
       if (await isFile(join3(current, "config.toml"))) {
         return { path: current, source: "walk-up" };
@@ -330,7 +324,8 @@ async function bootstrapLocks(options) {
   const bootstrapLockPath = resolveBootstrapLockPath(options.pluginData);
   const autoUpdateLockPath = resolveLockPath(options.env, resolveStatePath(options.env));
   const bootstrapLock = await acquireLock(bootstrapLockPath, now, staleMs);
-  if (bootstrapLock === null) return null;
+  if (bootstrapLock === null)
+    return null;
   if (autoUpdateLockPath === bootstrapLockPath) {
     return { autoUpdateLockPath, bootstrapLockPath, release: () => bootstrapLock.release(), statePath };
   }
@@ -350,26 +345,31 @@ async function bootstrapLocks(options) {
   };
 }
 function scanMarketplaceSource(configToml, marketplaceName) {
-  const expectedHeaders = /* @__PURE__ */ new Set([`marketplaces.${marketplaceName}`, `marketplaces.${JSON.stringify(marketplaceName)}`]);
+  const expectedHeaders = new Set([`marketplaces.${marketplaceName}`, `marketplaces.${JSON.stringify(marketplaceName)}`]);
   let inMarketplaceSection = false;
-  for (const line of configToml.split("\n")) {
+  for (const line of configToml.split(`
+`)) {
     const header = parseTomlHeader(line);
     if (header !== null) {
       inMarketplaceSection = expectedHeaders.has(header);
       continue;
     }
-    if (!inMarketplaceSection) continue;
+    if (!inMarketplaceSection)
+      continue;
     const valueText = parseSourceAssignment(line);
-    if (valueText === null) continue;
+    if (valueText === null)
+      continue;
     const source = parseTomlStringValue(valueText);
-    return source === void 0 ? { kind: "unparsable" } : { kind: "source", source };
+    return source === undefined ? { kind: "unparsable" } : { kind: "source", source };
   }
   return { kind: "absent" };
 }
 function parseTomlHeader(line) {
   const trimmed = line.trim();
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return null;
-  if (trimmed.startsWith("[[")) return null;
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]"))
+    return null;
+  if (trimmed.startsWith("[["))
+    return null;
   return trimmed.slice(1, -1).trim();
 }
 function parseSourceAssignment(line) {
@@ -378,16 +378,17 @@ function parseSourceAssignment(line) {
 }
 function parseTomlStringValue(valueText) {
   const trimmed = valueText.trim();
-  if (trimmed.startsWith('"')) return parseLeadingJsonString(trimmed);
+  if (trimmed.startsWith('"'))
+    return parseLeadingJsonString(trimmed);
   if (trimmed.startsWith("'")) {
     const closingIndex = trimmed.indexOf("'", 1);
-    return closingIndex === -1 ? void 0 : trimmed.slice(1, closingIndex);
+    return closingIndex === -1 ? undefined : trimmed.slice(1, closingIndex);
   }
-  return void 0;
+  return;
 }
 function parseLeadingJsonString(value) {
   let escaped = false;
-  for (let index = 1; index < value.length; index += 1) {
+  for (let index = 1;index < value.length; index += 1) {
     if (escaped) {
       escaped = false;
       continue;
@@ -400,22 +401,25 @@ function parseLeadingJsonString(value) {
     if (char === '"') {
       try {
         const parsed = JSON.parse(value.slice(0, index + 1));
-        return typeof parsed === "string" ? parsed : void 0;
+        return typeof parsed === "string" ? parsed : undefined;
       } catch {
-        return void 0;
+        return;
       }
     }
   }
-  return void 0;
+  return;
 }
 function classifyMarketplaceSource(source) {
   const trimmed = source.trim();
-  if (trimmed.length === 0) return "unparsable";
-  if (/^(https?|ssh|git):\/\//i.test(trimmed) || trimmed.startsWith("git@")) return "marketplace";
+  if (trimmed.length === 0)
+    return "unparsable";
+  if (/^(https?|ssh|git):\/\//i.test(trimmed) || trimmed.startsWith("git@"))
+    return "marketplace";
   if (trimmed.startsWith("/") || trimmed.startsWith("~") || trimmed.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(trimmed)) {
     return "npx-local";
   }
-  if (trimmed.toLowerCase().endsWith(".git")) return "marketplace";
+  if (trimmed.toLowerCase().endsWith(".git"))
+    return "marketplace";
   return "unparsable";
 }
 async function isFile(path) {
@@ -429,165 +433,362 @@ async function readOptionalFile(path) {
   try {
     return await readFile3(path, "utf8");
   } catch {
-    return void 0;
+    return;
   }
 }
 
-// src/worker.ts
+// components/bootstrap/src/worker.ts
 import { appendFile as appendFile2, mkdir as mkdir8, readFile as readFile12 } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
-import { dirname as dirname8, join as join15, resolve as resolve5 } from "node:path";
+import { dirname as dirname7, join as join19, resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
-// src/provision.ts
+// components/bootstrap/src/provision.ts
 import { execFile } from "node:child_process";
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { chmod, mkdir as mkdir3, readFile as readFile4, rename as rename2, rm as rm3, writeFile as writeFile2 } from "node:fs/promises";
-import { basename as basename2, dirname as dirname5, join as join5 } from "node:path";
+import { rm as rm4 } from "node:fs/promises";
+import { dirname as dirname4, join as join7 } from "node:path";
 import { promisify } from "node:util";
-import { inflateRawSync } from "node:zlib";
 
-// ../../../../ast-grep-mcp/src/sg-cli-path.ts
-import { createRequire } from "node:module";
-import { homedir as defaultHomedir } from "node:os";
-import { dirname as dirname4, join as join4 } from "node:path";
-import { existsSync, statSync } from "node:fs";
-var SG_PATH_ENV_KEY = "OMO_AST_GREP_SG_PATH";
-var WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat"];
-function isValidBinary(filePath) {
+// ../../utils/src/ast-grep/sg-manifest.ts
+var SG_PINNED_VERSION = "0.43.0";
+var SG_RELEASE_ASSETS = {
+  "darwin-arm64": {
+    sha256: "8c847d0a29aa4b3101b3361e0b3ee7fb53c7e497adc9ed1afc9615538cd40782",
+    url: "https://github.com/ast-grep/ast-grep/releases/download/0.43.0/app-aarch64-apple-darwin.zip"
+  },
+  "darwin-x64": {
+    sha256: "6d703090b106747b2f56086b6ccc7e798fe78bcae70257aa20519b220153555b",
+    url: "https://github.com/ast-grep/ast-grep/releases/download/0.43.0/app-x86_64-apple-darwin.zip"
+  },
+  "linux-arm64": {
+    sha256: "e706846148493967f3ab8011334817edd86ce5acbec10718b2a7b40799c640ff",
+    url: "https://github.com/ast-grep/ast-grep/releases/download/0.43.0/app-aarch64-unknown-linux-gnu.zip"
+  },
+  "linux-x64": {
+    sha256: "a26253a9c821d935f7e383e40f0de7c2ca62a4121de1f73a6d81ec32eae631e0",
+    url: "https://github.com/ast-grep/ast-grep/releases/download/0.43.0/app-x86_64-unknown-linux-gnu.zip"
+  },
+  "win32-arm64": {
+    sha256: "a519fdd90324bf6858fde2d3feb2b862d67b834dc11af8f5b6c2c8143ab6a6c5",
+    url: "https://github.com/ast-grep/ast-grep/releases/download/0.43.0/app-aarch64-pc-windows-msvc.zip"
+  },
+  "win32-x64": {
+    sha256: "a4febbc8c48671e5729d85e29e4ebe5a051b7250d19545bca18e725ccf40ef61",
+    url: "https://github.com/ast-grep/ast-grep/releases/download/0.43.0/app-x86_64-pc-windows-msvc.zip"
+  }
+};
+function normalizeRuntimePlatform(platform = process.platform) {
+  if (platform === "darwin" || platform === "linux" || platform === "win32")
+    return platform;
+  return "linux";
+}
+function normalizeRuntimeArch(arch = process.arch) {
+  if (arch === "arm64" || arch === "aarch64")
+    return "arm64";
+  return "x64";
+}
+function runtimeSlug(platform = process.platform, arch = process.arch) {
+  return `${normalizeRuntimePlatform(platform)}-${normalizeRuntimeArch(arch)}`;
+}
+function sgBinaryName(platform = process.platform) {
+  return normalizeRuntimePlatform(platform) === "win32" ? "sg.exe" : "sg";
+}
+// ../../utils/src/ast-grep/sg-provisioner.ts
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
+import { chmod, mkdir as mkdir3, rename as rename2, rm as rm3, writeFile as writeFile2 } from "node:fs/promises";
+import { basename as basename2, isAbsolute, join as join4, relative, resolve as resolve2 } from "node:path";
+import { inflateRawSync } from "node:zlib";
+var DEFAULT_DOWNLOAD_TIMEOUT_MS = 60000;
+var EOCD_SIGNATURE = 101010256;
+var CENTRAL_SIGNATURE = 33639248;
+var LOCAL_SIGNATURE = 67324752;
+var ZIP64_SENTINEL = 4294967295;
+
+class SgProvisionError extends Error {
+  code;
+  constructor(code, message, options = {}) {
+    super(message, options);
+    this.name = "SgProvisionError";
+    this.code = code;
+  }
+}
+function describeFailure2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function sha256(bytes) {
+  return createHash2("sha256").update(bytes).digest("hex");
+}
+function timeoutSignal(signal) {
+  const timeout = AbortSignal.timeout(DEFAULT_DOWNLOAD_TIMEOUT_MS);
+  return signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
+}
+async function downloadAsset(url, fetchImpl, signal) {
+  const activeFetch = fetchImpl ?? globalThis.fetch;
+  let response;
   try {
-    const stats = statSync(filePath);
-    if (!stats.isFile()) {
-      return false;
+    response = await activeFetch(url, { signal });
+  } catch (error) {
+    throw new SgProvisionError("download_failed", `failed to download ast-grep ${SG_PINNED_VERSION} from ${url}: ${describeFailure2(error)}`, { cause: error });
+  }
+  if (!response.ok) {
+    throw new SgProvisionError("download_failed", `failed to download ast-grep ${SG_PINNED_VERSION} from ${url}: HTTP ${response.status}`);
+  }
+  try {
+    return Buffer.from(await response.arrayBuffer());
+  } catch (error) {
+    throw new SgProvisionError("download_failed", `failed to read ast-grep ${SG_PINNED_VERSION} download from ${url}: ${describeFailure2(error)}`, { cause: error });
+  }
+}
+function zipEntryBaseName(entryName) {
+  const segments = entryName.split("/");
+  return segments[segments.length - 1] ?? entryName;
+}
+function findEndOfCentralDirectory(zip) {
+  const lowestOffset = Math.max(0, zip.length - 22 - 65535);
+  for (let offset = zip.length - 22;offset >= lowestOffset; offset -= 1) {
+    if (zip.readUInt32LE(offset) === EOCD_SIGNATURE)
+      return offset;
+  }
+  throw new SgProvisionError("extract_failed", "downloaded ast-grep asset is not a zip archive");
+}
+function listZipEntries(zip) {
+  const eocdOffset = findEndOfCentralDirectory(zip);
+  const entryCount = zip.readUInt16LE(eocdOffset + 10);
+  let cursor = zip.readUInt32LE(eocdOffset + 16);
+  const entries = [];
+  for (let index = 0;index < entryCount; index += 1) {
+    if (cursor + 46 > zip.length || zip.readUInt32LE(cursor) !== CENTRAL_SIGNATURE) {
+      throw new SgProvisionError("extract_failed", "downloaded ast-grep zip central directory is corrupt");
     }
-    const size = stats.size;
-    const lowerPath = filePath.toLowerCase();
-    if (lowerPath.endsWith(".cmd") || lowerPath.endsWith(".bat")) {
-      return size > 0;
+    const nameLength = zip.readUInt16LE(cursor + 28);
+    const extraLength = zip.readUInt16LE(cursor + 30);
+    const commentLength = zip.readUInt16LE(cursor + 32);
+    entries.push({
+      compressedSize: zip.readUInt32LE(cursor + 20),
+      localHeaderOffset: zip.readUInt32LE(cursor + 42),
+      method: zip.readUInt16LE(cursor + 10),
+      name: zip.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8"),
+      uncompressedSize: zip.readUInt32LE(cursor + 24)
+    });
+    cursor += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+function decompressZipEntry(raw, entry) {
+  if (entry.method === 0)
+    return Buffer.from(raw);
+  if (entry.method === 8)
+    return inflateRawSync(raw);
+  throw new SgProvisionError("extract_failed", `ast-grep zip entry ${entry.name} uses unsupported compression method ${entry.method}`);
+}
+function readZipEntryBytes(zip, entry) {
+  if (entry.compressedSize === ZIP64_SENTINEL || entry.uncompressedSize === ZIP64_SENTINEL || entry.localHeaderOffset === ZIP64_SENTINEL) {
+    throw new SgProvisionError("extract_failed", `ast-grep zip entry ${entry.name} uses unsupported zip64 extensions`);
+  }
+  if (zip.readUInt32LE(entry.localHeaderOffset) !== LOCAL_SIGNATURE) {
+    throw new SgProvisionError("extract_failed", `ast-grep zip entry ${entry.name} has a corrupt local header`);
+  }
+  const nameLength = zip.readUInt16LE(entry.localHeaderOffset + 26);
+  const extraLength = zip.readUInt16LE(entry.localHeaderOffset + 28);
+  const dataStart = entry.localHeaderOffset + 30 + nameLength + extraLength;
+  const bytes = decompressZipEntry(zip.subarray(dataStart, dataStart + entry.compressedSize), entry);
+  if (bytes.length !== entry.uncompressedSize) {
+    throw new SgProvisionError("extract_failed", `ast-grep zip entry ${entry.name} inflated to ${bytes.length} bytes, expected ${entry.uncompressedSize}`);
+  }
+  return bytes;
+}
+function extractStandaloneSgBinary(zip, platform) {
+  const suffix = platform === "win32" ? ".exe" : "";
+  const entries = listZipEntries(zip);
+  const preferredNames = [`ast-grep${suffix}`, `sg${suffix}`];
+  for (const preferred of preferredNames) {
+    const entry = entries.find((candidate) => zipEntryBaseName(candidate.name) === preferred);
+    if (entry !== undefined)
+      return readZipEntryBytes(zip, entry);
+  }
+  throw new SgProvisionError("extract_failed", `ast-grep release zip has no standalone ${preferredNames.join(" or ")} binary`);
+}
+function assertInsideTarget(targetDir, filePath) {
+  const relativePath = relative(targetDir, filePath);
+  if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new SgProvisionError("write_failed", `refusing to write ast-grep binary outside targetDir: ${filePath}`);
+  }
+}
+async function provisionSgBinary(options) {
+  const platform = options.platform ?? process.platform;
+  const slug = runtimeSlug(platform, options.arch ?? process.arch);
+  const asset = options.releaseAssets?.[slug] ?? SG_RELEASE_ASSETS[slug];
+  if (asset === undefined) {
+    throw new SgProvisionError("unsupported_platform", `ast-grep ${SG_PINNED_VERSION} has no asset for ${slug}`);
+  }
+  const targetDir = resolve2(options.targetDir);
+  const destination = join4(targetDir, sgBinaryName(platform));
+  const tempPath = join4(targetDir, `.sg-${randomUUID2().slice(0, 8)}.partial`);
+  assertInsideTarget(targetDir, destination);
+  assertInsideTarget(targetDir, tempPath);
+  try {
+    await mkdir3(targetDir, { recursive: true });
+    const archive = await downloadAsset(asset.url, options.fetchImpl, timeoutSignal(options.signal));
+    const actualSha256 = sha256(archive);
+    if (actualSha256 !== asset.sha256) {
+      throw new SgProvisionError("bad_checksum", `checksum mismatch for ${basename2(asset.url)}: expected ${asset.sha256}, got ${actualSha256}`);
     }
-    return size > 1e4;
-  } catch {
+    await writeFile2(tempPath, extractStandaloneSgBinary(archive, platform));
+    await chmod(tempPath, 493);
+    await rename2(tempPath, destination);
+    return destination;
+  } catch (error) {
+    await rm3(tempPath, { force: true });
+    if (error instanceof SgProvisionError)
+      throw error;
+    throw new SgProvisionError("write_failed", `failed to provision ast-grep ${SG_PINNED_VERSION} into ${targetDir}: ${describeFailure2(error)}`, { cause: error });
+  }
+}
+// ../../utils/src/ast-grep/sg-resolver.ts
+import { execFileSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
+import { join as join6 } from "node:path";
+
+// ../../utils/src/runtime/which.ts
+import { accessSync, constants } from "node:fs";
+import { delimiter, join as join5 } from "node:path";
+var runtime = globalThis;
+function isUnsafeCommandName(commandName) {
+  if (commandName.includes("/") || commandName.includes("\\"))
+    return true;
+  if (commandName === "." || commandName === ".." || commandName.includes(".."))
+    return true;
+  if (/^[a-zA-Z]:/.test(commandName))
+    return true;
+  if (commandName.includes("\x00"))
+    return true;
+  return false;
+}
+function isExecutable(filePath) {
+  try {
+    accessSync(filePath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch (error) {
+    if (!(error instanceof Error) && Object.prototype.toString.call(error) !== "[object Error]") {
+      throw error;
+    }
     return false;
   }
 }
-function executableCandidates(filePath, platform = process.platform) {
-  if (platform !== "win32") return [filePath];
-  const candidates = [filePath];
-  const lowerPath = filePath.toLowerCase();
-  if (WINDOWS_EXECUTABLE_EXTENSIONS.some((extension) => lowerPath.endsWith(extension))) {
-    return candidates;
+function resolvePathValue() {
+  if (process.platform === "win32")
+    return process.env["Path"] ?? process.env["PATH"];
+  return process.env["PATH"];
+}
+function getWindowsCandidates(commandName) {
+  if (process.platform !== "win32")
+    return [commandName];
+  if (/\.[^\\/]+$/.test(commandName))
+    return [commandName];
+  return [commandName, `${commandName}.exe`, `${commandName}.cmd`, `${commandName}.bat`, `${commandName}.com`];
+}
+function bunWhich(commandName) {
+  if (!commandName)
+    return null;
+  if (isUnsafeCommandName(commandName))
+    return null;
+  const candidateNames = getWindowsCandidates(commandName);
+  for (const candidateName of candidateNames) {
+    const resolvedPath = runtime.Bun?.which(candidateName) ?? null;
+    if (resolvedPath !== null)
+      return resolvedPath;
   }
-  for (const extension of WINDOWS_EXECUTABLE_EXTENSIONS) {
-    candidates.push(`${filePath}${extension}`);
-  }
-  return candidates;
-}
-function findValidExecutable(filePath, platform = process.platform) {
-  for (const candidate of executableCandidates(filePath, platform)) {
-    if (existsSync(candidate) && isValidBinary(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-function getPlatformPackageName(platform, arch) {
-  const platformMap = {
-    "darwin-arm64": "@ast-grep/cli-darwin-arm64",
-    "darwin-x64": "@ast-grep/cli-darwin-x64",
-    "linux-arm64": "@ast-grep/cli-linux-arm64-gnu",
-    "linux-x64": "@ast-grep/cli-linux-x64-gnu",
-    "win32-x64": "@ast-grep/cli-win32-x64-msvc",
-    "win32-arm64": "@ast-grep/cli-win32-arm64-msvc",
-    "win32-ia32": "@ast-grep/cli-win32-ia32-msvc"
-  };
-  return platformMap[`${platform}-${arch}`] ?? null;
-}
-function isModuleResolutionFailure(error) {
-  return error instanceof Error && (error.message.includes("Cannot find module") || error.message.includes("Cannot find package"));
-}
-function defaultResolveModulePath(specifier) {
-  const require2 = createRequire(import.meta.url);
-  return require2.resolve(specifier);
-}
-function nonEmptyValue(value) {
-  if (value === void 0) return void 0;
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? void 0 : trimmed;
-}
-function findEnvOverrideSgPath(env, platform) {
-  const overridePath = nonEmptyValue(env[SG_PATH_ENV_KEY]);
-  if (overridePath === void 0) return null;
-  return findValidExecutable(overridePath, platform);
-}
-function findRuntimeDirSgPath(env, platform, arch, homedir5) {
-  const codexHome = nonEmptyValue(env["CODEX_HOME"]) ?? join4(homedir5(), ".codex");
-  const binaryName = platform === "win32" ? "sg.exe" : "sg";
-  const runtimePath = join4(codexHome, "runtime", "ast-grep", `${platform}-${arch}`, binaryName);
-  return findValidExecutable(runtimePath, platform);
-}
-function findSgCliPathSync(options = {}) {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const arch = options.arch ?? process.arch;
-  const homedir5 = options.homedir ?? defaultHomedir;
-  const resolveModulePath = options.resolveModulePath ?? defaultResolveModulePath;
-  const envOverridePath = findEnvOverrideSgPath(env, platform);
-  if (envOverridePath) {
-    return envOverridePath;
-  }
-  const runtimeDirPath = findRuntimeDirSgPath(env, platform, arch, homedir5);
-  if (runtimeDirPath) {
-    return runtimeDirPath;
-  }
-  const binaryName = "sg";
-  try {
-    const cliPackageJsonPath = resolveModulePath("@ast-grep/cli/package.json");
-    const cliDirectory = dirname4(cliPackageJsonPath);
-    const sgPath = join4(cliDirectory, binaryName);
-    const validSgPath = findValidExecutable(sgPath, platform);
-    if (validSgPath) {
-      return validSgPath;
-    }
-  } catch (error) {
-    if (!isModuleResolutionFailure(error)) {
-      throw error;
-    }
-  }
-  const platformPackage = getPlatformPackageName(platform, arch);
-  if (platformPackage) {
-    try {
-      const packageJsonPath = resolveModulePath(`${platformPackage}/package.json`);
-      const packageDirectory = dirname4(packageJsonPath);
-      const astGrepBinaryName = "ast-grep";
-      const binaryPath = join4(packageDirectory, astGrepBinaryName);
-      const validBinaryPath = findValidExecutable(binaryPath, platform);
-      if (validBinaryPath) {
-        return validBinaryPath;
-      }
-    } catch (error) {
-      if (!isModuleResolutionFailure(error)) {
-        throw error;
-      }
-    }
-  }
-  if (platform === "darwin") {
-    const homebrewPaths = ["/opt/homebrew/bin/sg", "/usr/local/bin/sg"];
-    for (const path of homebrewPaths) {
-      if (existsSync(path) && isValidBinary(path)) {
-        return path;
-      }
+  const pathValue = resolvePathValue();
+  if (!pathValue)
+    return null;
+  const pathEntries = pathValue.split(delimiter).filter((pathEntry) => pathEntry.length > 0);
+  if (pathEntries.length === 0)
+    return null;
+  for (const pathEntry of pathEntries) {
+    for (const candidateName of candidateNames) {
+      const candidatePath = join5(pathEntry, candidateName);
+      if (isExecutable(candidatePath))
+        return candidatePath;
     }
   }
   return null;
 }
 
-// src/provision.ts
+// ../../utils/src/ast-grep/types.ts
+var SG_PATH_ENV_KEY = "OMO_AST_GREP_SG_PATH";
+
+// ../../utils/src/ast-grep/sg-resolver.ts
+function nonEmptyValue(value) {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed.length === 0 ? null : trimmed;
+}
+function defaultFileExists(filePath) {
+  if (!existsSync(filePath))
+    return false;
+  try {
+    const stats = statSync(filePath);
+    return stats.isFile() && stats.size > 0;
+  } catch (error) {
+    if (error instanceof Error)
+      return false;
+    return false;
+  }
+}
+function defaultVersionProbe(binaryPath) {
+  return String(execFileSync(binaryPath, ["--version"], { encoding: "utf8", timeout: 5000 }));
+}
+function isAstGrepVersionOutput(output) {
+  return output.toLowerCase().includes("ast-grep");
+}
+function hasAstGrepVersion(binaryPath, runVersionProbeSync) {
+  try {
+    return isAstGrepVersionOutput(runVersionProbeSync(binaryPath));
+  } catch (error) {
+    if (error instanceof Error)
+      return false;
+    return false;
+  }
+}
+function pathCommandCandidates(platform) {
+  return platform === "linux" ? ["ast-grep", "sg"] : ["sg", "ast-grep"];
+}
+function findSgBinarySync(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const fileExists = options.fileExists ?? defaultFileExists;
+  const runVersionProbeSync = options.runVersionProbeSync ?? defaultVersionProbe;
+  const which = options.which ?? bunWhich;
+  try {
+    const envOverride = nonEmptyValue(env[SG_PATH_ENV_KEY]);
+    if (envOverride !== null && fileExists(envOverride))
+      return envOverride;
+    if (options.runtimeDir !== undefined) {
+      const runtimeCandidate = join6(options.runtimeDir, sgBinaryName(platform));
+      if (fileExists(runtimeCandidate))
+        return runtimeCandidate;
+    }
+    for (const commandName of pathCommandCandidates(platform)) {
+      const pathCandidate = which(commandName);
+      if (pathCandidate === null || !fileExists(pathCandidate))
+        continue;
+      if (commandName !== "sg" || hasAstGrepVersion(pathCandidate, runVersionProbeSync))
+        return pathCandidate;
+    }
+    return null;
+  } catch (error) {
+    if (error instanceof Error)
+      return null;
+    return null;
+  }
+}
+// components/bootstrap/src/provision.ts
 var SG_PROVISION_COMPONENT = "ast_grep";
 var SG_FORCE_PROVISION_ENV_KEY = "OMO_BOOTSTRAP_FORCE_PROVISION";
-var SG_MANIFEST_NAME = "ast-grep";
 function sgProvisionDestination(context, arch) {
-  const binaryName = context.platform === "win32" ? "sg.exe" : "sg";
-  return join5(context.codexHome, "runtime", "ast-grep", `${context.platform}-${arch}`, binaryName);
+  return join7(sgRuntimeDir(context.codexHome, context.platform, arch), sgBinaryName(context.platform));
+}
+function sgRuntimeDir(codexHome, platform, arch) {
+  return join7(codexHome, "runtime", "ast-grep", runtimeSlug(platform, arch));
 }
 async function runSgProvision(context, seams = {}) {
   const arch = seams.arch ?? process.arch;
@@ -604,9 +805,8 @@ async function runSgProvision(context, seams = {}) {
       return { degraded: [] };
     }
   }
-  const stagingDir = join5(dirname5(destination), `.staging-${randomUUID2().slice(0, 8)}`);
   try {
-    const version = await provisionFromManifest(context, seams, { arch, destination, stagingDir });
+    const version = await provisionFromSharedManifest(context, seams, { arch, destination });
     await appendBootstrapLog(context.pluginData, context.now, "sg-provision", {
       sg: `provisioned:${destination}`,
       version
@@ -616,239 +816,213 @@ async function runSgProvision(context, seams = {}) {
     const reason = error instanceof Error ? error.message : String(error);
     await appendBootstrapLog(context.pluginData, context.now, "sg-provision-failed", { reason });
     return { degraded: [{ component: SG_PROVISION_COMPONENT, hint: BOOTSTRAP_DOCTOR_HINT, reason }] };
-  } finally {
-    await rm3(stagingDir, { force: true, recursive: true });
   }
 }
-async function provisionFromManifest(context, seams, layout) {
-  const manifest = await loadAssetManifest(SG_MANIFEST_NAME, context.flags.manifestDir);
-  const platformKey = `${context.platform}-${layout.arch}`;
-  const asset = manifest.platforms[platformKey];
-  if (asset === void 0) {
-    throw new Error(
-      `ast-grep ${manifest.version} has no asset for unsupported platform "${platformKey}" (available: ${Object.keys(manifest.platforms).join(", ")}).`
-    );
-  }
-  await mkdir3(layout.stagingDir, { recursive: true });
-  const archivePath = await downloadChecksummedAsset({
-    destination: join5(layout.stagingDir, basename2(new URL(asset.url).pathname)),
-    env: context.env,
-    sha256: asset.sha256,
-    url: asset.url,
-    ...seams.fetchImpl === void 0 ? {} : { fetchImpl: seams.fetchImpl }
+async function provisionFromSharedManifest(context, seams, layout) {
+  const provisionedPath = await provisionSgBinary({
+    arch: layout.arch,
+    platform: context.platform,
+    targetDir: dirname4(layout.destination),
+    ...seams.fetchImpl === undefined ? {} : { fetchImpl: seams.fetchImpl },
+    ...seams.releaseAssets === undefined ? {} : { releaseAssets: seams.releaseAssets }
   });
-  const binaryBytes = extractStandaloneSgBinary(await readFile4(archivePath), context.platform);
-  const stagedBinary = join5(layout.stagingDir, basename2(layout.destination));
-  await writeFile2(stagedBinary, binaryBytes);
-  await chmod(stagedBinary, 493);
-  await rename2(stagedBinary, layout.destination);
-  await verifyProvisionedVersion(layout.destination, manifest.version, seams);
-  return manifest.version;
+  if (provisionedPath !== layout.destination) {
+    await rm4(provisionedPath, { force: true });
+    throw new Error(`provisioned sg at ${provisionedPath} but expected ${layout.destination}; removed the binary.`);
+  }
+  await verifyProvisionedVersion(layout.destination, SG_PINNED_VERSION, seams);
+  return SG_PINNED_VERSION;
 }
 async function verifyProvisionedVersion(destination, pinnedVersion, seams) {
   let reported;
   try {
-    reported = (await (seams.runVersionProbe ?? defaultVersionProbe)(destination)).trim();
+    reported = (await (seams.runVersionProbe ?? defaultVersionProbe2)(destination)).trim();
   } catch (error) {
-    await rm3(destination, { force: true });
-    throw new Error(
-      `provisioned sg at ${destination} failed its --version probe: ${error instanceof Error ? error.message : String(error)}`
-    );
+    await rm4(destination, { force: true });
+    throw new Error(`provisioned sg at ${destination} failed its --version probe: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!reported.includes(pinnedVersion)) {
-    await rm3(destination, { force: true });
-    throw new Error(
-      `provisioned sg at ${destination} reported "${reported}" but the manifest pins version ${pinnedVersion}; removed the binary.`
-    );
+    await rm4(destination, { force: true });
+    throw new Error(`provisioned sg at ${destination} reported "${reported}" but the manifest pins version ${pinnedVersion}; removed the binary.`);
   }
 }
 function defaultResolvePreexistingSg(options) {
-  return findSgCliPathSync({
+  return findSgBinarySync({
     arch: options.arch,
     env: { ...options.env, CODEX_HOME: options.codexHome },
-    platform: options.platform
+    platform: options.platform,
+    runtimeDir: sgRuntimeDir(options.codexHome, options.platform, options.arch)
   });
 }
 var execFileAsync = promisify(execFile);
-async function defaultVersionProbe(binaryPath) {
+async function defaultVersionProbe2(binaryPath) {
   const { stdout } = await execFileAsync(binaryPath, ["--version"]);
   return String(stdout);
 }
-function extractStandaloneSgBinary(zip, platform) {
-  const suffix = platform === "win32" ? ".exe" : "";
-  const entries = listZipEntries(zip);
-  const preferredNames = [`ast-grep${suffix}`, `sg${suffix}`];
-  for (const preferred of preferredNames) {
-    const entry = entries.find((candidate) => zipEntryBaseName(candidate.name) === preferred);
-    if (entry !== void 0) return readZipEntryBytes(zip, entry);
-  }
-  throw new Error(
-    `ast-grep release zip has no ${preferredNames.join(" or ")} entry (found: ${entries.map((entry) => entry.name).join(", ")}).`
-  );
-}
-function zipEntryBaseName(entryName) {
-  const segments = entryName.split("/");
-  return segments[segments.length - 1] ?? entryName;
-}
-var EOCD_SIGNATURE = 101010256;
-var CENTRAL_SIGNATURE = 33639248;
-var LOCAL_SIGNATURE = 67324752;
-var ZIP64_SENTINEL = 4294967295;
-function listZipEntries(zip) {
-  const eocdOffset = findEndOfCentralDirectory(zip);
-  const entryCount = zip.readUInt16LE(eocdOffset + 10);
-  let cursor = zip.readUInt32LE(eocdOffset + 16);
-  const entries = [];
-  for (let index = 0; index < entryCount; index += 1) {
-    if (cursor + 46 > zip.length || zip.readUInt32LE(cursor) !== CENTRAL_SIGNATURE) {
-      throw new Error("zip central directory is corrupt (bad entry signature)");
-    }
-    const nameLength = zip.readUInt16LE(cursor + 28);
-    const extraLength = zip.readUInt16LE(cursor + 30);
-    const commentLength = zip.readUInt16LE(cursor + 32);
-    entries.push({
-      compressedSize: zip.readUInt32LE(cursor + 20),
-      localHeaderOffset: zip.readUInt32LE(cursor + 42),
-      method: zip.readUInt16LE(cursor + 10),
-      name: zip.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8"),
-      uncompressedSize: zip.readUInt32LE(cursor + 24)
-    });
-    cursor += 46 + nameLength + extraLength + commentLength;
-  }
-  return entries;
-}
-function findEndOfCentralDirectory(zip) {
-  const lowestOffset = Math.max(0, zip.length - 22 - 65535);
-  for (let offset = zip.length - 22; offset >= lowestOffset; offset -= 1) {
-    if (zip.readUInt32LE(offset) === EOCD_SIGNATURE) return offset;
-  }
-  throw new Error("downloaded asset is not a zip archive (end-of-central-directory record missing)");
-}
-function readZipEntryBytes(zip, entry) {
-  if (entry.compressedSize === ZIP64_SENTINEL || entry.uncompressedSize === ZIP64_SENTINEL || entry.localHeaderOffset === ZIP64_SENTINEL) {
-    throw new Error(`zip entry ${entry.name} uses unsupported zip64 extensions`);
-  }
-  if (zip.readUInt32LE(entry.localHeaderOffset) !== LOCAL_SIGNATURE) {
-    throw new Error(`zip entry ${entry.name} has a corrupt local header`);
-  }
-  const nameLength = zip.readUInt16LE(entry.localHeaderOffset + 26);
-  const extraLength = zip.readUInt16LE(entry.localHeaderOffset + 28);
-  const dataStart = entry.localHeaderOffset + 30 + nameLength + extraLength;
-  const raw = zip.subarray(dataStart, dataStart + entry.compressedSize);
-  const bytes = decompressZipEntry(raw, entry);
-  if (bytes.length !== entry.uncompressedSize) {
-    throw new Error(
-      `zip entry ${entry.name} inflated to ${bytes.length} bytes but the archive declares ${entry.uncompressedSize}`
-    );
-  }
-  return bytes;
-}
-function decompressZipEntry(raw, entry) {
-  if (entry.method === 0) return Buffer.from(raw);
-  if (entry.method === 8) return inflateRawSync(raw);
-  throw new Error(`zip entry ${entry.name} uses unsupported compression method ${entry.method}`);
-}
 
-// src/setup.ts
+// components/bootstrap/src/setup.ts
 import { execFile as execFile2 } from "node:child_process";
-import { copyFile as copyFile2, mkdir as mkdir7, readdir as readdir3, rm as rm7, stat as stat4 } from "node:fs/promises";
-import { join as join14 } from "node:path";
+import { copyFile as copyFile2, mkdir as mkdir7, readdir as readdir3, rm as rm9, stat as stat4 } from "node:fs/promises";
+import { join as join18 } from "node:path";
 import { promisify as promisify2 } from "node:util";
 
-// ../../../scripts/install/agents.mjs
-import { basename as basename3, join as join6 } from "node:path";
-import { copyFile, lstat, mkdir as mkdir4, readFile as readFile5, readdir, rm as rm4, writeFile as writeFile3 } from "node:fs/promises";
+// ../src/install/link-cached-plugin-agents.ts
+import { copyFile, lstat as lstat2, mkdir as mkdir4, readFile as readFile5, readdir, rm as rm6, writeFile as writeFile3 } from "node:fs/promises";
+import { basename as basename3, join as join9 } from "node:path";
 
-// ../../../scripts/install/utils.mjs
-import { constants as fsConstants } from "node:fs";
-import { access } from "node:fs/promises";
+// ../src/install/retired-managed-agent-purge.ts
+import { lstat, readFile as readFile4, rm as rm5 } from "node:fs/promises";
+import { join as join8 } from "node:path";
+var RETIRED_MANAGED_AGENT_FILES = [
+  {
+    fileName: "codex-ultrawork-reviewer.toml",
+    requiredMarkers: [
+      'name = "codex-ultrawork-reviewer"',
+      'description = "Strict ultrawork verification reviewer.',
+      'developer_instructions = """You are the ultrawork verification reviewer.'
+    ]
+  }
+];
+async function purgeRetiredManagedAgentFiles(input) {
+  const agentsDir = join8(input.codexHome, "agents");
+  if (!await exists(agentsDir))
+    return;
+  for (const retiredAgent of RETIRED_MANAGED_AGENT_FILES) {
+    const agentPath = join8(agentsDir, retiredAgent.fileName);
+    if (!await exists(agentPath))
+      continue;
+    const agentStat = await lstat(agentPath);
+    if (agentStat.isDirectory() && !agentStat.isSymbolicLink())
+      continue;
+    const content = await readTextIfExists(agentPath);
+    if (content === null || !hasRequiredMarkers(content, retiredAgent.requiredMarkers))
+      continue;
+    await rm5(agentPath, { force: true });
+  }
+}
+function hasRequiredMarkers(content, markers) {
+  return markers.every((marker) => content.includes(marker));
+}
+async function readTextIfExists(path) {
+  try {
+    return await readFile4(path, "utf8");
+  } catch (error) {
+    if (nodeErrorCode(error) === "ENOENT")
+      return null;
+    throw error;
+  }
+}
 async function exists(path) {
   try {
-    await access(path, fsConstants.F_OK);
+    await lstat(path);
     return true;
-  } catch {
+  } catch (error) {
+    if (nodeErrorCode(error) !== "ENOENT")
+      throw error;
     return false;
   }
 }
-function isRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function nodeErrorCode(error) {
+  if (!(error instanceof Error) || !("code" in error))
+    return null;
+  return typeof error.code === "string" ? error.code : null;
 }
 
-// ../../../scripts/install/agents.mjs
+// ../src/install/link-cached-plugin-agents.ts
 var MANIFEST_FILE = ".installed-agents.json";
-async function capturePreservedAgentReasoning({ codexHome }) {
-  const agentsDir = join6(codexHome, "agents");
-  if (!await exists(agentsDir)) return /* @__PURE__ */ new Map();
-  const preserved = /* @__PURE__ */ new Map();
+async function capturePreservedAgentReasoning(input) {
+  const agentsDir = join9(input.codexHome, "agents");
+  if (!await exists2(agentsDir))
+    return new Map;
+  const preserved = new Map;
   const agentEntries = await readdir(agentsDir, { withFileTypes: true });
   for (const entry of agentEntries) {
-    if (!entry.name.endsWith(".toml")) continue;
-    const content = await readTextIfExists(join6(agentsDir, entry.name));
-    if (content === null) continue;
+    if (!entry.name.endsWith(".toml"))
+      continue;
+    const content = await readTextIfExists2(join9(agentsDir, entry.name));
+    if (content === null)
+      continue;
     const effort = extractReasoningEffort(content);
-    if (effort !== null) preserved.set(agentNameFromToml(entry.name), effort);
+    if (effort !== null)
+      preserved.set(agentNameFromToml(entry.name), effort);
   }
   return preserved;
 }
-async function capturePreservedAgentServiceTier({ codexHome }) {
-  const agentsDir = join6(codexHome, "agents");
-  if (!await exists(agentsDir)) return /* @__PURE__ */ new Map();
-  const preserved = /* @__PURE__ */ new Map();
+async function capturePreservedAgentServiceTier(input) {
+  const agentsDir = join9(input.codexHome, "agents");
+  if (!await exists2(agentsDir))
+    return new Map;
+  const preserved = new Map;
   const agentEntries = await readdir(agentsDir, { withFileTypes: true });
   for (const entry of agentEntries) {
-    if (!entry.name.endsWith(".toml")) continue;
-    const content = await readTextIfExists(join6(agentsDir, entry.name));
-    if (content === null) continue;
+    if (!entry.name.endsWith(".toml"))
+      continue;
+    const content = await readTextIfExists2(join9(agentsDir, entry.name));
+    if (content === null)
+      continue;
     preserved.set(agentNameFromToml(entry.name), extractServiceTier(content));
   }
   return preserved;
 }
-async function linkCachedPluginAgents({ codexHome, pluginRoot, preservedReasoning = /* @__PURE__ */ new Map(), preservedServiceTier = /* @__PURE__ */ new Map() }) {
-  const bundledAgents = await discoverBundledAgents(pluginRoot);
+async function linkCachedPluginAgents(input) {
+  const bundledAgents = await discoverBundledAgents(input.pluginRoot);
+  await purgeRetiredManagedAgentFiles({ codexHome: input.codexHome });
   if (bundledAgents.length === 0) {
-    await writeManifest(pluginRoot, []);
+    await writeManifest(input.pluginRoot, []);
     return [];
   }
-  const agentsDir = join6(codexHome, "agents");
+  const agentsDir = join9(input.codexHome, "agents");
   await mkdir4(agentsDir, { recursive: true });
   const linked = [];
   for (const agentPath of bundledAgents) {
     const agentFileName = basename3(agentPath);
     const agentName = agentNameFromToml(agentFileName);
-    const linkPath = join6(agentsDir, agentFileName);
+    const linkPath = join9(agentsDir, agentFileName);
     await replaceWithCopy(linkPath, agentPath);
-    await restorePreservedReasoning({ linkPath, target: agentPath, value: preservedReasoning.get(agentName) });
+    await restorePreservedReasoning({
+      agentName,
+      linkPath,
+      target: agentPath,
+      value: input.preservedReasoning?.get(agentName)
+    });
     await restorePreservedServiceTier({
       linkPath,
-      preserved: preservedServiceTier.has(agentName),
-      value: preservedServiceTier.get(agentName) ?? null
+      preserved: input.preservedServiceTier?.has(agentName) ?? false,
+      value: input.preservedServiceTier?.get(agentName) ?? null
     });
     linked.push({ name: agentFileName, path: linkPath, target: agentPath });
   }
-  await writeManifest(pluginRoot, linked.map((entry) => entry.path));
+  await writeManifest(input.pluginRoot, linked.map((entry) => entry.path));
   return linked;
 }
-async function restorePreservedServiceTier({ linkPath, preserved, value }) {
-  if (!preserved) return;
-  const content = await readFile5(linkPath, "utf8");
-  if (extractServiceTier(content) === value) return;
-  const replacement = replaceServiceTier(content, value);
-  if (!replacement.replaced) return;
-  await writeFile3(linkPath, replacement.content);
+async function restorePreservedServiceTier(input) {
+  if (!input.preserved)
+    return;
+  const content = await readFile5(input.linkPath, "utf8");
+  if (extractServiceTier(content) === input.value)
+    return;
+  const replacement = replaceServiceTier(content, input.value);
+  if (!replacement.replaced)
+    return;
+  await writeFile3(input.linkPath, replacement.content);
 }
 async function discoverBundledAgents(pluginRoot) {
-  const componentsRoot = join6(pluginRoot, "components");
-  if (!await exists(componentsRoot)) return [];
+  const componentsRoot = join9(pluginRoot, "components");
+  if (!await exists2(componentsRoot))
+    return [];
   const componentEntries = await readdir(componentsRoot, { withFileTypes: true });
   const agents = [];
   for (const entry of componentEntries) {
-    if (!entry.isDirectory()) continue;
-    const agentsRoot = join6(componentsRoot, entry.name, "agents");
-    if (!await exists(agentsRoot)) continue;
+    if (!entry.isDirectory())
+      continue;
+    const agentsRoot = join9(componentsRoot, entry.name, "agents");
+    if (!await exists2(agentsRoot))
+      continue;
     const agentEntries = await readdir(agentsRoot, { withFileTypes: true });
     for (const file of agentEntries) {
-      if (!file.isFile() || !file.name.endsWith(".toml")) continue;
-      agents.push(join6(agentsRoot, file.name));
+      if (!file.isFile() || !file.name.endsWith(".toml"))
+        continue;
+      agents.push(join9(agentsRoot, file.name));
     }
   }
   agents.sort();
@@ -859,35 +1033,38 @@ async function replaceWithCopy(linkPath, target) {
   await copyFile(target, linkPath);
 }
 async function prepareReplacement(linkPath) {
-  if (!await lstatExists(linkPath)) return;
-  const entryStat = await lstat(linkPath);
+  if (!await exists2(linkPath))
+    return;
+  const entryStat = await lstat2(linkPath);
   if (entryStat.isDirectory() && !entryStat.isSymbolicLink()) {
     throw new Error(`${linkPath} already exists and is a directory; refusing to replace`);
   }
-  await rm4(linkPath, { force: true });
+  await rm6(linkPath, { force: true });
 }
 async function writeManifest(pluginRoot, agentPaths) {
-  const manifestPath = join6(pluginRoot, MANIFEST_FILE);
+  const manifestPath = join9(pluginRoot, MANIFEST_FILE);
   const payload = { agents: [...agentPaths].sort() };
-  await writeFile3(manifestPath, `${JSON.stringify(payload, null, "	")}
+  await writeFile3(manifestPath, `${JSON.stringify(payload, null, "\t")}
 `);
 }
-async function restorePreservedReasoning({ linkPath, target, value }) {
-  if (value === void 0) return;
-  const content = await readFile5(target, "utf8");
-  if (extractReasoningEffort(content) === value) return;
-  const replacement = replaceReasoningEffort(content, value);
-  if (!replacement.replaced) return;
-  if (await lstatExists(linkPath)) {
-    await rm4(linkPath, { force: true });
-  }
-  await writeFile3(linkPath, replacement.content);
+async function restorePreservedReasoning(input) {
+  if (input.value === undefined)
+    return;
+  const content = await readFile5(input.target, "utf8");
+  const bundledEffort = extractReasoningEffort(content);
+  if (bundledEffort === input.value)
+    return;
+  const replacement = replaceReasoningEffort(content, input.value);
+  if (!replacement.replaced)
+    return;
+  await writeFile3(input.linkPath, replacement.content);
 }
-async function readTextIfExists(path) {
+async function readTextIfExists2(path) {
   try {
     return await readFile5(path, "utf8");
   } catch (error) {
-    if (nodeErrorCode(error) === "ENOENT") return null;
+    if (nodeErrorCode2(error) === "ENOENT")
+      return null;
     throw error;
   }
 }
@@ -899,10 +1076,14 @@ function extractServiceTier(content) {
 }
 function extractTopLevelStringSetting(content, key) {
   for (const line of content.split(/\n/)) {
-    if (isSectionHeader(line)) return null;
+    if (isSectionHeader(line))
+      return null;
     const rawValue = topLevelStringSettingRawValue(line, key);
-    if (rawValue === void 0) continue;
-    return JSON.parse(rawValue);
+    if (rawValue === undefined)
+      continue;
+    const parsed = parseJsonString(rawValue);
+    if (parsed !== null)
+      return parsed;
   }
   return null;
 }
@@ -913,33 +1094,36 @@ function replaceServiceTier(content, value) {
   return replaceTopLevelStringSetting(content, "service_tier", value, { insertIfMissing: true });
 }
 function replaceTopLevelStringSetting(content, key, value, options) {
-  let replaced = false;
   const lines = content.split(/\n/);
-  for (let index = 0; index < lines.length; index += 1) {
+  for (let index = 0;index < lines.length; index += 1) {
     const line = lines[index];
-    if (isSectionHeader(line)) break;
-    if (topLevelStringSettingRawValue(line, key) === void 0) continue;
+    if (line === undefined || isSectionHeader(line))
+      break;
+    if (topLevelStringSettingRawValue(line, key) === undefined)
+      continue;
     if (value === null) {
       lines.splice(index, 1);
-      replaced = true;
-      break;
+      return { content: lines.join(`
+`), replaced: true };
     }
     lines[index] = line.replace(/=\s*"(?:[^"\\]|\\.)*"/, `= ${JSON.stringify(value)}`);
-    replaced = true;
-    break;
+    return { content: lines.join(`
+`), replaced: true };
   }
-  if (!replaced && value !== null && options.insertIfMissing) {
-    lines.splice(topLevelInsertionIndex(lines), 0, `${key} = ${JSON.stringify(value)}`);
-    replaced = true;
-  }
-  return { content: lines.join("\n"), replaced };
+  if (value === null || !options.insertIfMissing)
+    return { content, replaced: false };
+  lines.splice(topLevelInsertionIndex(lines), 0, `${key} = ${JSON.stringify(value)}`);
+  return { content: lines.join(`
+`), replaced: true };
 }
 function topLevelStringSettingRawValue(line, key) {
   const match = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*("(?:[^"\\]|\\.)*")/);
-  if (match === null) return void 0;
+  if (match === null)
+    return;
   const settingKey = match[1];
   const rawValue = match[2];
-  if (settingKey !== key || rawValue === void 0) return void 0;
+  if (settingKey !== key || rawValue === undefined)
+    return;
   return rawValue;
 }
 function topLevelInsertionIndex(lines) {
@@ -958,49 +1142,61 @@ function isSectionHeader(line) {
 function agentNameFromToml(fileName) {
   return fileName.endsWith(".toml") ? fileName.slice(0, -".toml".length) : fileName;
 }
-async function lstatExists(path) {
+function parseJsonString(value) {
   try {
-    await lstat(path);
-    return true;
+    const parsed = JSON.parse(value);
+    return typeof parsed === "string" ? parsed : null;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
-    throw error;
+    if (error instanceof Error)
+      return null;
+    return null;
   }
 }
-function nodeErrorCode(error) {
-  if (!(error instanceof Error) || !("code" in error)) return null;
+async function exists2(path) {
+  try {
+    await lstat2(path);
+    return true;
+  } catch (error) {
+    if (nodeErrorCode2(error) !== "ENOENT")
+      throw error;
+    return false;
+  }
+}
+function nodeErrorCode2(error) {
+  if (!(error instanceof Error) || !("code" in error))
+    return null;
   return typeof error.code === "string" ? error.code : null;
 }
 
-// ../../../scripts/install/bin-dir.mjs
-import { homedir as homedir3 } from "node:os";
-import { join as join7, resolve as resolve2 } from "node:path";
-function resolveCodexInstallerBinDir(options = {}) {
-  const homeDir = resolve2(options.homeDir ?? homedir3());
-  const env = options.env ?? process.env;
-  const explicitBinDir = nonEmptyEnvValue(env, "CODEX_LOCAL_BIN_DIR");
-  if (explicitBinDir !== void 0) return explicitBinDir;
-  const codexHome = resolve2(options.codexHome ?? nonEmptyEnvValue(env, "CODEX_HOME") ?? join7(homeDir, ".codex"));
-  const defaultCodexHome = resolve2(join7(homeDir, ".codex"));
-  return codexHome === defaultCodexHome ? join7(homeDir, ".local", "bin") : join7(codexHome, "bin");
-}
-function nonEmptyEnvValue(env, key) {
-  const value = env[key];
-  if (typeof value !== "string") return void 0;
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? void 0 : trimmed;
-}
+// ../src/install/codex-cache-bins.ts
+import { chmod as chmod2, lstat as lstat5, mkdir as mkdir5, readFile as readFile7, readdir as readdir2, readlink as readlink2, rm as rm8, stat as stat3, symlink, writeFile as writeFile4 } from "node:fs/promises";
+import { basename as basename4, isAbsolute as isAbsolute2, join as join12, relative as relative2, resolve as resolve3, sep } from "node:path";
 
-// ../../../scripts/install/bin-links.mjs
-import { chmod as chmod2, lstat as lstat3, mkdir as mkdir5, readFile as readFile7, readdir as readdir2, readlink as readlink2, rm as rm6, stat as stat3, symlink, writeFile as writeFile4 } from "node:fs/promises";
-import { basename as basename4, join as join9, relative, resolve as resolve3 } from "node:path";
-
-// ../../../scripts/install/command-shim.mjs
+// ../src/install/codex-cache-command-shim.ts
 var COMMAND_SHIM_MARKER = ":: generated by oh-my-openagent Codex installer";
 
-// ../../../scripts/install/legacy-bins.mjs
-import { lstat as lstat2, readFile as readFile6, readlink, rm as rm5 } from "node:fs/promises";
-import { join as join8 } from "node:path";
+// ../src/install/codex-cache-fs.ts
+import { lstat as lstat3 } from "node:fs/promises";
+async function fileExistsStrict(path) {
+  try {
+    await lstat3(path);
+    return true;
+  } catch (error) {
+    if (isNodeErrorWithCode(error) && error.code === "ENOENT")
+      return false;
+    throw error;
+  }
+}
+function isPlainRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isNodeErrorWithCode(error) {
+  return typeof error === "object" && error !== null && "code" in error;
+}
+
+// ../src/install/codex-cache-legacy-bins.ts
+import { lstat as lstat4, readFile as readFile6, readlink, rm as rm7 } from "node:fs/promises";
+import { join as join10 } from "node:path";
 var LEGACY_CODEX_COMPONENT_BINS = [
   { name: "omo", component: "ulw-loop" },
   { name: "codex-comment-checker", component: "comment-checker" },
@@ -1012,24 +1208,29 @@ var LEGACY_CODEX_COMPONENT_BINS = [
 ];
 async function removeLegacyCodexComponentBins(binDir, platform) {
   for (const entry of LEGACY_CODEX_COMPONENT_BINS) {
-    const linkPath = join8(binDir, platform === "win32" ? `${entry.name}.cmd` : entry.name);
+    const linkPath = join10(binDir, platform === "win32" ? `${entry.name}.cmd` : entry.name);
     await removeLegacyCodexComponentBin(linkPath, entry.component, platform);
   }
 }
 async function removeLegacyCodexComponentBin(linkPath, component, platform) {
   try {
-    const stat6 = await lstat2(linkPath);
+    const stat3 = await lstat4(linkPath);
     if (platform !== "win32") {
-      if (!stat6.isSymbolicLink()) return;
+      if (!stat3.isSymbolicLink())
+        return;
       const target = await readlink(linkPath);
-      if (isManagedLegacyComponentTarget(target, component)) await rm5(linkPath, { force: true });
+      if (isManagedLegacyComponentTarget(target, component))
+        await rm7(linkPath, { force: true });
       return;
     }
-    if (!stat6.isFile()) return;
+    if (!stat3.isFile())
+      return;
     const content = await readFile6(linkPath, "utf8");
-    if (content.includes(COMMAND_SHIM_MARKER)) await rm5(linkPath, { force: true });
+    if (content.includes(COMMAND_SHIM_MARKER))
+      await rm7(linkPath, { force: true });
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    if (isNodeErrorWithCode2(error) && error.code === "ENOENT")
+      return;
     throw error;
   }
 }
@@ -1040,167 +1241,40 @@ function isManagedLegacyComponentTarget(target, component) {
   return suffix[0] === "components" && suffix[1] === component && suffix[2] === "dist" && suffix[3] === "cli.js" && (hasPluginCachePrefix(parts, suffixStart) || hasOmoCodexPluginPrefix(parts, suffixStart));
 }
 function hasPluginCachePrefix(parts, endExclusive) {
-  for (let index = 0; index < endExclusive - 1; index += 1) {
-    if (parts[index] === "plugins" && parts[index + 1] === "cache") return true;
+  for (let index = 0;index < endExclusive - 1; index += 1) {
+    if (parts[index] === "plugins" && parts[index + 1] === "cache")
+      return true;
   }
   return false;
 }
 function hasOmoCodexPluginPrefix(parts, endExclusive) {
-  for (let index = 0; index <= endExclusive - 3; index += 1) {
-    if (parts[index] === "packages" && parts[index + 1] === "omo-codex" && parts[index + 2] === "plugin") return true;
+  for (let index = 0;index <= endExclusive - 3; index += 1) {
+    if (parts[index] === "packages" && parts[index + 1] === "omo-codex" && parts[index + 2] === "plugin")
+      return true;
   }
   return false;
 }
+function isNodeErrorWithCode2(error) {
+  return typeof error === "object" && error !== null && "code" in error;
+}
 
-// ../../../scripts/install/bin-links.mjs
-var RESERVED_NESTED_BIN_NAMES = /* @__PURE__ */ new Set(["omo", "lazycodex", "lazycodex-ai", "oh-my-opencode", "oh-my-openagent"]);
+// ../src/install/codex-cache-runtime-wrapper.ts
+import { join as join11 } from "node:path";
 var RUNTIME_WRAPPER_MARKER = "OMO_GENERATED_RUNTIME_WRAPPER";
-async function linkCachedPluginBins({ binDir, pluginRoot, platform = process.platform }) {
-  const binLinks = await discoverPackageBins(pluginRoot);
-  await mkdir5(binDir, { recursive: true });
-  await removeLegacyCodexComponentBins(binDir, platform);
-  const linked = [];
-  for (const link of binLinks) {
-    const linkPath = await linkCachedPluginBin(binDir, link, platform);
-    linked.push({ name: link.name, path: linkPath, target: link.target });
-  }
-  return linked;
-}
-async function linkRootRuntimeBin({ binDir, codexHome, repoRoot, platform = process.platform }) {
-  const cliPath = join9(repoRoot, "dist", "cli", "index.js");
-  if (!await isFile2(cliPath)) return null;
-  const nodeCliPath = join9(repoRoot, "dist", "cli-node", "index.js");
-  await mkdir5(binDir, { recursive: true });
-  if (platform === "win32") {
-    const linkPath2 = join9(binDir, "omo.cmd");
-    await replaceRuntimeWrapper(linkPath2, windowsRuntimeWrapper(cliPath, codexHome, binDir, nodeCliPath));
-    return { name: "omo", path: linkPath2, target: cliPath };
-  }
-  const linkPath = join9(binDir, "omo");
-  await replaceRuntimeWrapper(linkPath, posixRuntimeWrapper(cliPath, codexHome, binDir, nodeCliPath));
-  await chmod2(linkPath, 493);
-  return { name: "omo", path: linkPath, target: cliPath };
-}
-async function linkCachedPluginBin(binDir, link, platform) {
-  if (platform === "win32") {
-    const linkPath2 = join9(binDir, `${link.name}.cmd`);
-    await replaceCommandShim(linkPath2, link.target);
-    return linkPath2;
-  }
-  const linkPath = join9(binDir, link.name);
-  await replaceSymlink(linkPath, link.target);
-  return linkPath;
-}
-async function isFile2(path) {
-  try {
-    return (await stat3(path)).isFile();
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
-    throw error;
-  }
-}
-async function discoverPackageBins(root) {
-  const links = [];
-  await collectPackageBins(root, root, links);
-  return links;
-}
-async function collectPackageBins(directory, root, links) {
-  const entries = await readdir2(directory, { withFileTypes: true });
-  const packageJsonPath = join9(directory, "package.json");
-  if (entries.some((entry) => entry.isFile() && entry.name === "package.json")) {
-    await appendPackageBinLinks(packageJsonPath, directory, root, links);
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist") continue;
-    const childPath = join9(directory, entry.name);
-    if (!isPathInside(childPath, root)) continue;
-    await collectPackageBins(childPath, root, links);
-  }
-}
-async function appendPackageBinLinks(packageJsonPath, packageRoot, root, links) {
-  const packageJson = JSON.parse(await readFile7(packageJsonPath, "utf8"));
-  if (!isRecord3(packageJson)) return;
-  const bin = packageJson.bin;
-  if (typeof bin === "string" && typeof packageJson.name === "string") {
-    const name = basename4(packageJson.name);
-    if (!isReservedNestedBinName(name, packageRoot, root)) {
-      links.push(createPackageBinLink(name, bin, packageRoot));
-    }
-    return;
-  }
-  if (!isRecord3(bin)) return;
-  for (const [name, target] of Object.entries(bin)) {
-    if (typeof target !== "string") continue;
-    if (isReservedNestedBinName(name, packageRoot, root)) continue;
-    links.push(createPackageBinLink(name, target, packageRoot));
-  }
-}
-function createPackageBinLink(name, target, packageRoot) {
-  assertSafeBinName(name);
-  if (target.includes("\0")) {
-    throw new Error(`package bin target for ${name} contains a NUL byte`);
-  }
-  const resolvedTarget = resolve3(packageRoot, target);
-  if (!isPathInside(resolvedTarget, packageRoot)) {
-    throw new Error(`package bin target for ${name} escapes package root`);
-  }
-  return { name, target: resolvedTarget };
-}
-function assertSafeBinName(name) {
-  if (name.length === 0 || name === "." || name === ".." || name.includes("\0") || name.includes("/") || name.includes("\\")) {
-    throw new Error(`invalid package bin name: ${name}`);
-  }
-}
-function isReservedNestedBinName(name, packageRoot, root) {
-  return packageRoot !== root && RESERVED_NESTED_BIN_NAMES.has(name);
-}
-async function replaceSymlink(linkPath, targetPath) {
-  if (await existingNonSymlink(linkPath)) {
-    throw new Error(`${linkPath} already exists and is not a symlink`);
-  }
-  await rm6(linkPath, { force: true });
-  await symlink(targetPath, linkPath);
-}
-async function replaceCommandShim(linkPath, targetPath) {
-  if (await existingNonShim(linkPath)) {
-    throw new Error(`${linkPath} already exists and is not a command shim`);
-  }
-  await writeFile4(linkPath, `@echo off\r
-${COMMAND_SHIM_MARKER}\r
-node "${targetPath}" %*\r
-`);
-}
-async function replaceRuntimeWrapper(linkPath, content) {
-  if (await existingNonRuntimeWrapper(linkPath)) {
-    throw new Error(`${linkPath} already exists and is not a generated OMO runtime wrapper`);
-  }
-  await rm6(linkPath, { force: true });
-  await writeFile4(linkPath, content);
-}
-async function existingNonRuntimeWrapper(path) {
-  try {
-    const stat6 = await lstat3(path);
-    if (stat6.isSymbolicLink()) return false;
-    if (!stat6.isFile()) return true;
-    const content = await readFile7(path, "utf8");
-    return !content.includes(RUNTIME_WRAPPER_MARKER);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
-    throw error;
-  }
-}
 function posixRuntimeWrapper(cliPath, codexHome, binDir, nodeCliPath) {
-  const ulwLoopBin = join9(binDir, "omo-ulw-loop");
-  const nodeCli = escapePosixDoubleQuoted(nodeCliPath);
+  const ulwLoopBin = toPosixPath(join11(binDir, "omo-ulw-loop"));
+  const nodeCli = escapePosixDoubleQuoted(toPosixPath(nodeCliPath));
+  const escapedCliPath = escapePosixDoubleQuoted(toPosixPath(cliPath));
+  const escapedCodexHome = escapePosixDoubleQuoted(toPosixPath(codexHome));
+  const escapedUlwLoopBin = escapePosixDoubleQuoted(ulwLoopBin);
   return [
     "#!/bin/sh",
     `# ${RUNTIME_WRAPPER_MARKER}`,
-    `export CODEX_HOME="\${CODEX_HOME:-${escapePosixDoubleQuoted(codexHome)}}"`,
+    `export CODEX_HOME="\${CODEX_HOME:-${escapedCodexHome}}"`,
     'export OMO_SPARKSHELL_APP_SERVER_SOCKET="${OMO_SPARKSHELL_APP_SERVER_SOCKET:-$CODEX_HOME/app-server-control/app-server-control.sock}"',
-    'if [ "$1" = "ulw-loop" ] && [ -x "' + escapePosixDoubleQuoted(ulwLoopBin) + '" ]; then',
+    'if [ "$1" = "ulw-loop" ] && [ -x "' + escapedUlwLoopBin + '" ]; then',
     "  shift",
-    '  exec "' + escapePosixDoubleQuoted(ulwLoopBin) + '" "$@"',
+    '  exec "' + escapedUlwLoopBin + '" "$@"',
     "fi",
     `if [ "\${OMO_RUNTIME:-}" = "node" ] && [ -f "${nodeCli}" ]; then`,
     `  exec node "${nodeCli}" "$@"`,
@@ -1224,12 +1298,17 @@ function posixRuntimeWrapper(cliPath, codexHome, binDir, nodeCliPath) {
     `  echo "omo: bun runtime not found (checked PATH, ~/.bun/bin, /opt/homebrew/bin, /usr/local/bin) and the node fallback CLI is missing at ${nodeCli}; install bun from https://bun.sh, or reinstall omo and force the fallback with OMO_RUNTIME=node" >&2`,
     "  exit 127",
     "fi",
-    `exec "$BUN_BINARY" "${escapePosixDoubleQuoted(cliPath)}" "$@"`,
+    `if [ ! -f "${escapedCliPath}" ]; then`,
+    `  echo "omo: runtime target missing at ${escapedCliPath}; reinstall with: npx --yes lazycodex-ai@latest install --no-tui" >&2`,
+    "  exit 1",
+    "fi",
+    `exec "$BUN_BINARY" "${escapedCliPath}" "$@"`,
     ""
-  ].join("\n");
+  ].join(`
+`);
 }
 function windowsRuntimeWrapper(cliPath, codexHome, binDir, nodeCliPath) {
-  const ulwLoopBin = join9(binDir, "omo-ulw-loop.cmd");
+  const ulwLoopBin = join11(binDir, "omo-ulw-loop.cmd");
   return [
     "@echo off",
     `rem ${RUNTIME_WRAPPER_MARKER}`,
@@ -1254,124 +1333,225 @@ function windowsRuntimeWrapper(cliPath, codexHome, binDir, nodeCliPath) {
     `  echo omo: bun runtime not found and the node fallback CLI is missing at ${nodeCliPath}; install bun from https://bun.sh or reinstall omo and force OMO_RUNTIME=node 1>&2`,
     "  exit /b 127",
     ")",
+    `if not exist "${cliPath}" (`,
+    `  echo omo: runtime target missing at ${cliPath}; reinstall with: npx --yes lazycodex-ai@latest install --no-tui 1>&2`,
+    "  exit /b 1",
+    ")",
     `"%BUN_BINARY%" "${cliPath}" %*`,
     ""
-  ].join("\r\n");
+  ].join(`\r
+`);
+}
+function toPosixPath(path) {
+  return path.replaceAll("\\", "/");
 }
 function escapePosixDoubleQuoted(value) {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("$", "\\$").replaceAll("`", "\\`");
+  return value.replaceAll("\\", "\\\\").replaceAll('"', "\\\"").replaceAll("$", "\\$").replaceAll("`", "\\`");
+}
+
+// ../src/install/codex-cache-bins.ts
+var RESERVED_NESTED_BIN_NAMES = new Set(["omo", "lazycodex", "lazycodex-ai", "oh-my-opencode", "oh-my-openagent"]);
+async function linkCachedPluginBins(input) {
+  const binLinks = await discoverPackageBins(input.pluginRoot);
+  const platform = input.platform ?? process.platform;
+  await mkdir5(input.binDir, { recursive: true });
+  await removeLegacyCodexComponentBins(input.binDir, platform);
+  const linked = [];
+  for (const link of binLinks) {
+    const linkPath = await linkCachedPluginBin(input.binDir, link, platform);
+    linked.push({ name: link.name, path: linkPath, target: link.target });
+  }
+  return linked;
+}
+async function linkRootRuntimeBin(input) {
+  const cliPath = join12(input.repoRoot, "dist", "cli", "index.js");
+  if (!await isFile2(cliPath))
+    return null;
+  const nodeCliPath = join12(input.repoRoot, "dist", "cli-node", "index.js");
+  const platform = input.platform ?? process.platform;
+  await mkdir5(input.binDir, { recursive: true });
+  if (platform === "win32") {
+    const linkPath2 = join12(input.binDir, "omo.cmd");
+    await replaceRuntimeWrapper(linkPath2, windowsRuntimeWrapper(cliPath, input.codexHome, input.binDir, nodeCliPath));
+    return { name: "omo", path: linkPath2, target: cliPath };
+  }
+  const linkPath = join12(input.binDir, "omo");
+  await replaceRuntimeWrapper(linkPath, posixRuntimeWrapper(cliPath, input.codexHome, input.binDir, nodeCliPath));
+  await chmod2(linkPath, 493);
+  return { name: "omo", path: linkPath, target: cliPath };
+}
+async function linkCachedPluginBin(binDir, link, platform) {
+  if (platform === "win32") {
+    const linkPath2 = join12(binDir, `${link.name}.cmd`);
+    await replaceCommandShim(linkPath2, link.target);
+    return linkPath2;
+  }
+  const linkPath = join12(binDir, link.name);
+  await replaceSymlink(linkPath, link.target);
+  return linkPath;
+}
+async function isFile2(path) {
+  try {
+    return (await stat3(path)).isFile();
+  } catch (error) {
+    if (isNodeErrorWithCode(error) && error.code === "ENOENT")
+      return false;
+    throw error;
+  }
+}
+async function discoverPackageBins(root) {
+  const links = [];
+  await collectPackageBins(root, root, links);
+  return links;
+}
+async function collectPackageBins(directory, root, links) {
+  const entries = await readdir2(directory, { withFileTypes: true });
+  if (entries.some((entry) => entry.isFile() && entry.name === "package.json")) {
+    await appendPackageBinLinks(join12(directory, "package.json"), directory, root, links);
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory())
+      continue;
+    if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist")
+      continue;
+    const childPath = join12(directory, entry.name);
+    if (!childPath.startsWith(root))
+      continue;
+    await collectPackageBins(childPath, root, links);
+  }
+}
+async function appendPackageBinLinks(packageJsonPath, packageRoot, root, links) {
+  const packageJson = JSON.parse(await readFile7(packageJsonPath, "utf8"));
+  if (!isPlainRecord(packageJson))
+    return;
+  const packageName = packageJson.name;
+  const packageBin = packageJson.bin;
+  if (typeof packageBin === "string" && typeof packageName === "string") {
+    const name = assertSafeCommandName(basename4(packageName));
+    if (!isReservedNestedBinName(name, packageRoot, root)) {
+      links.push({ name, target: resolvePackageBinTarget(packageRoot, packageBin) });
+    }
+    return;
+  }
+  if (!isPlainRecord(packageBin))
+    return;
+  for (const [name, target] of Object.entries(packageBin)) {
+    if (typeof target !== "string")
+      continue;
+    const commandName = assertSafeCommandName(name);
+    if (isReservedNestedBinName(commandName, packageRoot, root))
+      continue;
+    links.push({ name: commandName, target: resolvePackageBinTarget(packageRoot, target) });
+  }
+}
+function assertSafeCommandName(name) {
+  if (name.length === 0 || name === "." || name === ".." || name.includes("/") || name.includes("\\") || name.includes("\x00")) {
+    throw new Error(`Invalid package bin command name: ${name}`);
+  }
+  return name;
+}
+function isReservedNestedBinName(name, packageRoot, root) {
+  return packageRoot !== root && RESERVED_NESTED_BIN_NAMES.has(name);
+}
+function resolvePackageBinTarget(packageRoot, target) {
+  if (target.includes("\x00"))
+    throw new Error("Package bin target must stay inside package root");
+  const root = resolve3(packageRoot);
+  const resolvedTarget = resolve3(root, target);
+  const relativeTarget = relative2(root, resolvedTarget);
+  if (relativeTarget === "" || relativeTarget !== ".." && !relativeTarget.startsWith(`..${sep}`) && !isAbsolute2(relativeTarget)) {
+    return resolvedTarget;
+  }
+  throw new Error("Package bin target must stay inside package root");
+}
+async function replaceSymlink(linkPath, targetPath) {
+  if (await existingNonSymlink(linkPath))
+    throw new Error(`${linkPath} already exists and is not a symlink`);
+  await rm8(linkPath, { force: true });
+  await symlink(targetPath, linkPath);
+}
+async function replaceCommandShim(linkPath, targetPath) {
+  if (await existingNonShim(linkPath))
+    throw new Error(`${linkPath} already exists and is not a command shim`);
+  await writeFile4(linkPath, `@echo off\r
+${COMMAND_SHIM_MARKER}\r
+node "${targetPath}" %*\r
+`);
+}
+async function replaceRuntimeWrapper(linkPath, content) {
+  if (await existingNonRuntimeWrapper(linkPath))
+    throw new Error(`${linkPath} already exists and is not a generated OMO runtime wrapper`);
+  await rm8(linkPath, { force: true });
+  await writeFile4(linkPath, content);
+}
+async function existingNonRuntimeWrapper(path) {
+  try {
+    const stat4 = await lstat5(path);
+    if (stat4.isSymbolicLink())
+      return false;
+    if (!stat4.isFile())
+      return true;
+    const content = await readFile7(path, "utf8");
+    return !content.includes(RUNTIME_WRAPPER_MARKER);
+  } catch (error) {
+    if (isNodeErrorWithCode(error) && error.code === "ENOENT")
+      return false;
+    throw error;
+  }
 }
 async function existingNonShim(path) {
   try {
-    const stat6 = await lstat3(path);
-    if (!stat6.isFile()) return true;
+    const stat4 = await lstat5(path);
+    if (!stat4.isFile())
+      return true;
     const content = await readFile7(path, "utf8");
-    if (content.includes(COMMAND_SHIM_MARKER)) return false;
+    if (content.includes(COMMAND_SHIM_MARKER))
+      return false;
     throw new Error(`${path} already exists and is not a generated command shim`);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    if (isNodeErrorWithCode(error) && error.code === "ENOENT")
+      return false;
     throw error;
   }
 }
 async function existingNonSymlink(path) {
   try {
-    const stat6 = await lstat3(path);
-    if (!stat6.isSymbolicLink()) return true;
+    const stat4 = await lstat5(path);
+    if (!stat4.isSymbolicLink())
+      return true;
     await readlink2(path);
     return false;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    if (isNodeErrorWithCode(error) && error.code === "ENOENT")
+      return false;
     throw error;
   }
 }
-function isRecord3(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isPathInside(candidatePath, rootPath) {
-  const pathFromRoot = relative(rootPath, candidatePath);
-  return pathFromRoot === "" || !pathFromRoot.startsWith("..") && !pathFromRoot.startsWith(`..\\`) && !isDriveRelative(pathFromRoot);
-}
-function isDriveRelative(path) {
-  return /^[a-zA-Z]:/.test(path);
-}
 
-// ../../../scripts/install/config.mjs
+// ../src/install/codex-config-toml.ts
 import { mkdir as mkdir6, readFile as readFile9 } from "node:fs/promises";
-import { dirname as dirname7 } from "node:path";
+import { dirname as dirname6 } from "node:path";
 
-// ../../../scripts/install/atomic-write.mjs
-import { lstat as lstat4, readlink as readlink3, realpath, rename as rename3, unlink, writeFile as writeFile5 } from "node:fs/promises";
-import { basename as basename5, dirname as dirname6, isAbsolute, join as join10, resolve as resolve4 } from "node:path";
-var RENAME_RETRY_DELAYS_MS = [10, 25, 50];
-var RETRIABLE_RENAME_CODES = /* @__PURE__ */ new Set(["EPERM", "EBUSY"]);
-function isRetriableRenameError(error) {
-  if (!(error instanceof Error)) return false;
-  return RETRIABLE_RENAME_CODES.has(Reflect.get(error, "code"));
-}
-async function writeFileAtomic(targetPath, data) {
-  const writeTarget = await resolveSymlinkTarget(targetPath);
-  const temporaryPath = join10(
-    dirname6(writeTarget),
-    `.tmp-${basename5(writeTarget)}-${process.pid}-${Date.now()}`
-  );
-  await writeFile5(temporaryPath, data);
-  try {
-    await renameWithRetry(temporaryPath, writeTarget);
-  } catch (renameError) {
-    await unlink(temporaryPath).catch(() => {
-    });
-    throw renameError;
-  }
-}
-async function resolveSymlinkTarget(targetPath) {
-  let linkStats;
-  try {
-    linkStats = await lstat4(targetPath);
-  } catch {
-    return targetPath;
-  }
-  if (!linkStats.isSymbolicLink()) return targetPath;
-  try {
-    return await realpath(targetPath);
-  } catch {
-    const linkValue = await readlink3(targetPath);
-    return isAbsolute(linkValue) ? linkValue : resolve4(dirname6(targetPath), linkValue);
-  }
-}
-async function renameWithRetry(fromPath, toPath) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await rename3(fromPath, toPath);
-      return;
-    } catch (renameError) {
-      if (!isRetriableRenameError(renameError) || attempt >= RENAME_RETRY_DELAYS_MS.length) {
-        throw renameError;
-      }
-      await delay(RENAME_RETRY_DELAYS_MS[attempt]);
-    }
-  }
-}
-function delay(milliseconds) {
-  return new Promise((resolve6) => setTimeout(resolve6, milliseconds));
-}
-
-// ../../../scripts/install/toml-editor.mjs
+// ../src/install/toml-section-editor.ts
 function findTomlSection(config, header) {
   const headerLine = `[${header}]`;
   const lines = config.match(/[^\n]*\n?|$/g) ?? [];
   let offset = 0;
   let start = -1;
   for (const line of lines) {
-    if (line.length === 0) break;
+    if (line.length === 0)
+      break;
     const trimmed = line.trim();
     if (start === -1) {
-      if (trimmed === headerLine) start = offset;
+      if (trimmed === headerLine)
+        start = offset;
     } else if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
       return { start, end: offset, text: config.slice(start, offset) };
     }
     offset += line.length;
   }
-  if (start === -1) return null;
+  if (start === -1)
+    return null;
   return { start, end: config.length, text: config.slice(start) };
 }
 function replaceOrInsertSetting(config, section, key, value) {
@@ -1389,16 +1569,20 @@ function replaceOrInsertRootSetting(config, key, value) {
   const root = config.slice(0, sectionStart);
   const suffix = config.slice(sectionStart);
   const linePattern = new RegExp(`^${escapeRegExp(key)}\\s*=.*$`, "m");
-  const replacement = linePattern.test(root) ? root.replace(linePattern, `${key} = ${value}`) : `${root.trimEnd()}${root.trimEnd().length > 0 ? "\n" : ""}${key} = ${value}
+  const replacement = linePattern.test(root) ? root.replace(linePattern, `${key} = ${value}`) : `${root.trimEnd()}${root.trimEnd().length > 0 ? `
+` : ""}${key} = ${value}
 `;
-  if (suffix.length === 0) return replacement;
+  if (suffix.length === 0)
+    return replacement;
   return `${replacement.trimEnd()}
 
 ${suffix.trimStart()}`;
 }
 function appendBlock(config, block) {
   const prefix = config.trimEnd();
-  return `${prefix}${prefix.length > 0 ? "\n\n" : ""}${block.trimEnd()}
+  return `${prefix}${prefix.length > 0 ? `
+
+` : ""}${block.trimEnd()}
 `;
 }
 function findFirstTableStart(config) {
@@ -1406,182 +1590,270 @@ function findFirstTableStart(config) {
   return match?.index ?? config.length;
 }
 function insertSetting(sectionText, key, value) {
-  const lines = sectionText.split("\n");
+  const lines = sectionText.split(`
+`);
   lines.splice(1, 0, `${key} = ${value}`);
-  return lines.join("\n");
+  return lines.join(`
+`);
 }
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// ../../../scripts/install/multi-agent-v2-config.mjs
-var CODEX_MULTI_AGENT_V2_HEADER = "features.multi_agent_v2";
-var CODEX_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 1e4;
-function ensureCodexMultiAgentV2Config(config) {
-  const normalizedConfig = removeLegacyAgentsMaxThreadsSetting(removeFeatureFlagSetting(config, "multi_agent_v2"));
-  const section = findTomlSection(normalizedConfig, CODEX_MULTI_AGENT_V2_HEADER);
-  const maxThreadsValue = CODEX_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION.toString();
-  if (!section) {
-    return appendBlock(
-      normalizedConfig,
-      `[${CODEX_MULTI_AGENT_V2_HEADER}]
-max_concurrent_threads_per_session = ${maxThreadsValue}
-hide_spawn_agent_metadata = false
-`
-    );
-  }
-  const withMaxThreads = replaceOrInsertSetting(
-    normalizedConfig,
-    section,
-    "max_concurrent_threads_per_session",
-    maxThreadsValue
-  );
-  const updatedSection = findTomlSection(withMaxThreads, CODEX_MULTI_AGENT_V2_HEADER);
-  return replaceOrInsertSetting(withMaxThreads, updatedSection, "hide_spawn_agent_metadata", "false");
-}
-function removeFeatureFlagSetting(config, featureName) {
-  const section = findTomlSection(config, "features");
-  if (!section) return config;
-  return removeSetting(config, section, featureName);
-}
-function removeLegacyAgentsMaxThreadsSetting(config) {
-  const section = findTomlSection(config, "agents");
-  if (!section) return config;
-  return removeSetting(config, section, "max_threads");
-}
+// ../src/install/codex-config-toml-sections.ts
+function removeTomlSections(config, shouldRemove) {
+  return splitTomlSections(config).filter((section) => section.header === null || !shouldRemove(section.header)).map((section) => section.text).join("").replace(/\n{3,}/g, `
 
-// ../../../scripts/install/model-catalog.mjs
-import { readFile as readFile8 } from "node:fs/promises";
-import { join as join11 } from "node:path";
-var FALLBACK_CODEX_MODEL_CATALOG = {
-  current: {
-    model: "gpt-5.5",
-    modelContextWindow: 4e5,
-    modelReasoningEffort: "high",
-    planModeReasoningEffort: "xhigh"
-  },
-  managedProfiles: [
-    {
-      model: "gpt-5.5",
-      modelContextWindow: 1e6,
-      modelReasoningEffort: "high",
-      planModeReasoningEffort: "xhigh"
-    },
-    { model: "gpt-5.5", modelContextWindow: 272e3 }
-  ]
-};
-async function readCodexModelCatalog(codexPackageRoot) {
-  try {
-    const parsed = JSON.parse(await readFile8(join11(codexPackageRoot, "plugin", "model-catalog.json"), "utf8"));
-    return parseCodexModelCatalog(parsed) ?? FALLBACK_CODEX_MODEL_CATALOG;
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    return FALLBACK_CODEX_MODEL_CATALOG;
-  }
+`);
 }
-function parseCodexModelCatalog(value) {
-  if (!isRecord4(value) || !isRecord4(value.current) || !Array.isArray(value.managedProfiles)) return null;
-  const { current } = value;
-  if (typeof current.model !== "string" || typeof current.model_context_window !== "number" || typeof current.model_reasoning_effort !== "string" || typeof current.plan_mode_reasoning_effort !== "string") {
+function splitTomlSections(config) {
+  const lines = config.match(/[^\n]*\n?|$/g) ?? [];
+  const sections = [];
+  let current = { header: null, text: "" };
+  for (const line of lines) {
+    if (line.length === 0)
+      break;
+    const header = parseTomlHeader2(line);
+    if (header !== null) {
+      if (current.text.length > 0)
+        sections.push(current);
+      current = { header, text: line };
+    } else {
+      current = { ...current, text: current.text + line };
+    }
+  }
+  if (current.text.length > 0)
+    sections.push(current);
+  return sections;
+}
+function parsePluginHeaderKey(header) {
+  const prefix = "plugins.";
+  if (!header.startsWith(prefix))
+    return null;
+  return parseLeadingJsonString2(header.slice(prefix.length));
+}
+function parseAgentHeaderName(header) {
+  const prefix = "agents.";
+  if (!header.startsWith(prefix))
+    return null;
+  const key = header.slice(prefix.length);
+  return key.startsWith('"') ? parseLeadingJsonString2(key) : key;
+}
+function parseJsonString2(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === "string" ? parsed : null;
+  } catch (error) {
+    if (error instanceof Error)
+      return null;
     return null;
   }
-  const managedProfiles = [];
-  for (const profile of value.managedProfiles) {
-    if (!isRecord4(profile) || !isRecord4(profile.match)) return null;
-    managedProfiles.push(parseProfileMatch(profile.match));
-  }
-  return {
-    current: {
-      model: current.model,
-      modelContextWindow: current.model_context_window,
-      modelReasoningEffort: current.model_reasoning_effort,
-      planModeReasoningEffort: current.plan_mode_reasoning_effort
-    },
-    managedProfiles
-  };
 }
-function parseProfileMatch(match) {
-  const profile = {};
-  if (typeof match.model === "string") profile.model = match.model;
-  if (typeof match.model_context_window === "number") profile.modelContextWindow = match.model_context_window;
-  if (typeof match.model_reasoning_effort === "string") profile.modelReasoningEffort = match.model_reasoning_effort;
-  if (typeof match.plan_mode_reasoning_effort === "string") profile.planModeReasoningEffort = match.plan_mode_reasoning_effort;
-  return profile;
-}
-function isRecord4(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// ../../../scripts/install/reasoning-config.mjs
-var MANAGED_KEYS = ["model", "model_context_window", "model_reasoning_effort", "plan_mode_reasoning_effort"];
-function ensureCodexReasoningConfig(config, catalog) {
-  const current = readRootReasoningSettings(config);
-  if (Object.keys(current).length > 0 && !matchesProfile(current, catalog.current) && !catalog.managedProfiles.some((profile) => matchesProfile(current, profile))) {
-    return config;
-  }
-  let next = replaceOrInsertRootSetting(config, "model", JSON.stringify(catalog.current.model));
-  next = replaceOrInsertRootSetting(next, "model_context_window", catalog.current.modelContextWindow.toString());
-  next = replaceOrInsertRootSetting(
-    next,
-    "model_reasoning_effort",
-    JSON.stringify(catalog.current.modelReasoningEffort)
-  );
-  next = replaceOrInsertRootSetting(next, "plan_mode_reasoning_effort", JSON.stringify(catalog.current.planModeReasoningEffort));
-  return next;
-}
-function readRootReasoningSettings(config) {
-  const settings = {};
-  for (const line of config.split(/\n/)) {
-    if (isSectionHeader2(line)) break;
-    for (const key of MANAGED_KEYS) {
-      if (!isRootSetting(line, key)) continue;
-      const value = parseTomlScalar(line.slice(line.indexOf("=") + 1));
-      if (key === "model" && typeof value === "string") settings.model = value;
-      if (key === "model_context_window" && typeof value === "number") settings.modelContextWindow = value;
-      if (key === "model_reasoning_effort" && typeof value === "string") settings.modelReasoningEffort = value;
-      if (key === "plan_mode_reasoning_effort" && typeof value === "string") settings.planModeReasoningEffort = value;
-    }
-  }
-  return settings;
-}
-function matchesProfile(current, profile) {
-  for (const [key, value] of Object.entries(profile)) {
-    if (current[key] !== value) return false;
-  }
-  return true;
-}
-function parseTomlScalar(value) {
-  const trimmed = value.trim();
-  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try {
-      return JSON.parse(trimmed);
-    } catch (error) {
-      if (error instanceof SyntaxError) return void 0;
-      throw error;
-    }
-  }
-  const numeric = Number(trimmed);
-  return Number.isFinite(numeric) ? numeric : void 0;
-}
-function isSectionHeader2(line) {
+function parseTomlHeader2(line) {
   const trimmed = line.trim();
-  return trimmed.startsWith("[") && trimmed.endsWith("]");
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]") || trimmed.startsWith("[["))
+    return null;
+  return trimmed.slice(1, -1);
 }
-function isRootSetting(line, key) {
-  const trimmed = line.trimStart();
-  if (trimmed.startsWith("#") || trimmed.startsWith("[")) return false;
-  const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=/);
-  return match?.[1] === key;
+function parseLeadingJsonString2(value) {
+  if (!value.startsWith('"'))
+    return parseJsonString2(value);
+  let escaped = false;
+  for (let index = 1;index < value.length; index += 1) {
+    const char = value[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"')
+      return parseJsonString2(value.slice(0, index + 1));
+  }
+  return null;
 }
 
-// ../../../scripts/install/permissions.mjs
+// ../src/install/codex-config-agents.ts
+var LEGACY_MANAGED_CODEX_AGENT_NAMES_TO_PURGE = ["codex-ultrawork-reviewer"];
+var CURRENT_MANAGED_CODEX_AGENT_NAMES = [
+  "explorer",
+  "librarian",
+  "metis",
+  "momus",
+  "plan"
+];
+var MANAGED_CODEX_AGENT_NAMES = [
+  ...LEGACY_MANAGED_CODEX_AGENT_NAMES_TO_PURGE,
+  ...CURRENT_MANAGED_CODEX_AGENT_NAMES
+];
+function removeStaleManagedAgentBlocks(config, keepAgentNames) {
+  const managedAgentNames = new Set(MANAGED_CODEX_AGENT_NAMES);
+  return splitTomlSections(config).filter((section) => {
+    if (section.header === null)
+      return true;
+    const agentName = parseAgentHeaderName(section.header);
+    if (agentName === null || !managedAgentNames.has(agentName) || keepAgentNames.has(agentName))
+      return true;
+    return !section.text.includes(`config_file = ${JSON.stringify(`./agents/${agentName}.toml`)}`);
+  }).map((section) => section.text).join("").replace(/\n{3,}/g, `
+
+`);
+}
+function ensureAgentConfig(config, agentConfig) {
+  const header = `agents.${tomlKeySegment(agentConfig.name)}`;
+  const section = findTomlSection(config, header);
+  const configFile = JSON.stringify(agentConfig.configFile);
+  if (!section)
+    return appendBlock(config, `[${header}]
+config_file = ${configFile}
+`);
+  return replaceOrInsertSetting(config, section, "config_file", configFile);
+}
+function tomlKeySegment(value) {
+  return /^[A-Za-z0-9_-]+$/.test(value) ? value : JSON.stringify(value);
+}
+
+// ../src/install/codex-config-atomic-write.ts
+import { lstat as lstat6, readlink as readlink3, realpath, rename as rename3, unlink, writeFile as writeFile5 } from "node:fs/promises";
+import { basename as basename5, dirname as dirname5, isAbsolute as isAbsolute3, join as join13, resolve as resolve4 } from "node:path";
+var RENAME_RETRY_DELAYS_MS = [10, 25, 50];
+var RETRIABLE_RENAME_CODES = new Set(["EPERM", "EBUSY"]);
+async function writeFileAtomic(targetPath, data) {
+  const writeTarget = await resolveSymlinkTarget(targetPath);
+  const temporaryPath = join13(dirname5(writeTarget), `.tmp-${basename5(writeTarget)}-${process.pid}-${Date.now()}`);
+  await writeFile5(temporaryPath, data);
+  try {
+    await renameWithRetry(temporaryPath, writeTarget);
+  } catch (error) {
+    await unlink(temporaryPath).catch((unlinkError) => {
+      if (unlinkError instanceof Error)
+        return;
+      return;
+    });
+    throw error;
+  }
+}
+async function resolveSymlinkTarget(targetPath) {
+  try {
+    const linkStats = await lstat6(targetPath);
+    if (!linkStats.isSymbolicLink())
+      return targetPath;
+  } catch (error) {
+    if (error instanceof Error)
+      return targetPath;
+    return targetPath;
+  }
+  try {
+    return await realpath(targetPath);
+  } catch (error) {
+    if (!(error instanceof Error))
+      throw error;
+    const linkValue = await readlink3(targetPath);
+    return isAbsolute3(linkValue) ? linkValue : resolve4(dirname5(targetPath), linkValue);
+  }
+}
+async function renameWithRetry(fromPath, toPath) {
+  for (let attempt = 0;; attempt += 1) {
+    try {
+      await rename3(fromPath, toPath);
+      return;
+    } catch (error) {
+      if (!isRetriableRenameError(error) || attempt >= RENAME_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      await delay(RENAME_RETRY_DELAYS_MS[attempt] ?? 0);
+    }
+  }
+}
+function isRetriableRenameError(error) {
+  if (!(error instanceof Error) || !("code" in error))
+    return false;
+  return typeof error.code === "string" && RETRIABLE_RENAME_CODES.has(error.code);
+}
+function delay(milliseconds) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+// ../src/install/codex-config-features.ts
+function ensureFeatureEnabled(config, featureName) {
+  const section = findTomlSection(config, "features");
+  if (!section)
+    return appendBlock(config, `[features]
+${featureName} = true
+`);
+  return replaceOrInsertSetting(config, section, featureName, "true");
+}
+
+// ../src/install/codex-config-marketplaces.ts
+var SISYPHUS_LEGACY_MARKETPLACES = ["lazycodex", "code-yeongyu-codex-plugins"];
+function legacyMarketplaceNames(marketplaceName) {
+  return marketplaceName === "sisyphuslabs" ? SISYPHUS_LEGACY_MARKETPLACES : [];
+}
+function removeMarketplaceBlock(config, marketplaceName) {
+  return removeTomlSections(config, (header) => header === `marketplaces.${marketplaceName}`);
+}
+function hasMarketplaceBlock(config, marketplaceName) {
+  return findTomlSection(config, `marketplaces.${marketplaceName}`) !== null;
+}
+function removeStaleMarketplacePluginBlocks(config, marketplaceName, keepPluginNames) {
+  return removeTomlSections(config, (header) => {
+    const pluginKey = parsePluginHeaderKey(header);
+    if (pluginKey === null)
+      return false;
+    const suffix = `@${marketplaceName}`;
+    if (!pluginKey.endsWith(suffix))
+      return false;
+    return !keepPluginNames.has(pluginKey.slice(0, -suffix.length));
+  });
+}
+function removeStaleMarketplaceHookStateBlocks(config, marketplaceName, keepPluginNames) {
+  return removeTomlSections(config, (header) => {
+    const prefix = "hooks.state.";
+    if (!header.startsWith(prefix))
+      return false;
+    const hookKey = parseJsonString2(header.slice(prefix.length));
+    if (hookKey === null)
+      return false;
+    const separator = hookKey.indexOf(":");
+    if (separator === -1)
+      return false;
+    const pluginKey = hookKey.slice(0, separator);
+    const suffix = `@${marketplaceName}`;
+    if (!pluginKey.endsWith(suffix))
+      return false;
+    return !keepPluginNames.has(pluginKey.slice(0, -suffix.length));
+  });
+}
+function ensureMarketplaceBlock(config, marketplaceName, source) {
+  const header = `marketplaces.${marketplaceName}`;
+  const lines = [
+    `[${header}]`,
+    `last_updated = "${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}"`,
+    `source_type = ${JSON.stringify(source.sourceType)}`,
+    `source = ${JSON.stringify(source.source)}`
+  ];
+  if (source.sourceType === "git") {
+    lines.push(`ref = ${JSON.stringify(source.ref)}`);
+  }
+  lines.push("");
+  const block = lines.join(`
+`);
+  const section = findTomlSection(config, header);
+  if (section)
+    return config.slice(0, section.start) + block + config.slice(section.end);
+  return appendBlock(config, block);
+}
+
+// ../src/install/codex-config-permissions.ts
 var AUTONOMOUS_FEATURES = ["multi_agent", "child_agents_md", "unified_exec", "goals"];
 function ensureAutonomousPermissions(config) {
   let next = replaceOrInsertRootSetting(config, "approval_policy", JSON.stringify("never"));
   next = replaceOrInsertRootSetting(next, "sandbox_mode", JSON.stringify("danger-full-access"));
   next = replaceOrInsertRootSetting(next, "network_access", JSON.stringify("enabled"));
   for (const featureName of AUTONOMOUS_FEATURES) {
-    next = ensureFeatureEnabled(next, featureName);
+    next = ensureFeatureEnabled2(next, featureName);
   }
   next = removeWindowsSandboxSetting(next);
   next = ensureNoticeEnabled(next, "hide_full_access_warning");
@@ -1589,17 +1861,20 @@ function ensureAutonomousPermissions(config) {
 }
 function removeWindowsSandboxSetting(config) {
   const section = findTomlSection(config, "windows");
-  if (!section) return config;
+  if (section === null)
+    return config;
   return removeSetting(config, section, "sandbox");
 }
 function ensureNoticeEnabled(config, key) {
   const section = findTomlSection(config, "notice");
-  if (!section) return appendNoticeBlock(config, key);
+  if (section === null)
+    return appendNoticeBlock(config, key);
   return replaceOrInsertSetting(config, section, key, "true");
 }
-function ensureFeatureEnabled(config, key) {
+function ensureFeatureEnabled2(config, key) {
   const section = findTomlSection(config, "features");
-  if (!section) return appendBlock(config, `[features]
+  if (section === null)
+    return appendBlock(config, `[features]
 ${key} = true
 `);
   return replaceOrInsertSetting(config, section, key, "true");
@@ -1610,350 +1885,295 @@ ${key} = true
 `);
 }
 
-// ../../../scripts/install/config.mjs
-var LEGACY_CODEX_PLUGIN_MARKETPLACE = ["code", "yeongyu", "codex", "plugins"].join("-");
-var SISYPHUS_LEGACY_MARKETPLACES = ["lazycodex", LEGACY_CODEX_PLUGIN_MARKETPLACE];
-var MANAGED_CODEX_AGENT_NAMES = [
-  "codex-ultrawork-reviewer",
-  "explorer",
-  "librarian",
-  "metis",
-  "momus",
-  "plan"
-];
-async function updateCodexConfig({
-  configPath,
-  repoRoot,
-  marketplaceName,
-  marketplaceSource = defaultMarketplaceSource(repoRoot),
-  preserveMarketplaceSource = false,
-  pluginNames,
-  platform = process.platform,
-  trustedHookStates = [],
-  agentConfigs = [],
-  autonomousPermissions = false,
-  gitBashEnabled = false
-}) {
-  await mkdir6(dirname7(configPath), { recursive: true });
-  let config = "";
-  if (await exists(configPath)) config = await readFile9(configPath, "utf8");
-  for (const legacyMarketplaceName of legacyMarketplaceNames(marketplaceName)) {
-    config = removeMarketplaceBlock(config, legacyMarketplaceName);
-    config = removeStaleMarketplacePluginBlocks(config, legacyMarketplaceName, /* @__PURE__ */ new Set());
-    config = removeStaleMarketplaceHookStateBlocks(config, legacyMarketplaceName, /* @__PURE__ */ new Set());
-  }
-  config = removeStaleMarketplacePluginBlocks(config, marketplaceName, new Set(pluginNames));
-  config = removeStaleMarketplaceHookStateBlocks(config, marketplaceName, new Set(pluginNames));
-  config = removeStaleManagedAgentBlocks(config, new Set(agentConfigs.map((agentConfig) => agentConfig.name)));
-  config = ensureFeatureEnabled2(config, "plugins");
-  config = ensureFeatureEnabled2(config, "plugin_hooks");
-  config = ensureFeatureEnabled2(config, "multi_agent");
-  config = ensureFeatureEnabled2(config, "child_agents_md");
-  config = ensureCodexReasoningConfig(config, await readCodexModelCatalog(repoRoot));
-  config = ensureCodexMultiAgentV2Config(config);
-  if (autonomousPermissions === true) config = ensureAutonomousPermissions(config);
-  if (preserveMarketplaceSource !== true) {
-    config = ensureMarketplaceBlock(config, marketplaceName, marketplaceSource);
-  }
-  for (const pluginName of pluginNames) {
-    config = ensurePluginEnabled(config, `${pluginName}@${marketplaceName}`);
-  }
-  config = ensureOmoBuiltinMcpPolicies(config, { marketplaceName, pluginNames, platform, gitBashEnabled });
-  for (const state of trustedHookStates) {
-    config = ensureHookTrusted(config, state.key, state.trustedHash);
-  }
-  for (const agentConfig of agentConfigs) {
-    config = ensureAgentConfig(config, agentConfig);
-  }
-  await writeFileAtomic(configPath, config.trimEnd() + "\n");
-}
-function legacyMarketplaceNames(marketplaceName) {
-  return marketplaceName === "sisyphuslabs" ? SISYPHUS_LEGACY_MARKETPLACES : [];
-}
-function removeMarketplaceBlock(config, marketplaceName) {
-  return removeTomlSections(config, (header) => header === `marketplaces.${marketplaceName}`);
-}
-function defaultMarketplaceSource(repoRoot) {
-  return {
-    sourceType: "local",
-    source: repoRoot
-  };
-}
-function removeStaleMarketplacePluginBlocks(config, marketplaceName, keepPluginNames) {
-  return removeTomlSections(config, (header) => {
-    const pluginKey = parsePluginHeaderKey(header);
-    if (pluginKey === null) return false;
-    const suffix = `@${marketplaceName}`;
-    if (!pluginKey.endsWith(suffix)) return false;
-    return !keepPluginNames.has(pluginKey.slice(0, -suffix.length));
-  });
-}
-function removeStaleMarketplaceHookStateBlocks(config, marketplaceName, keepPluginNames) {
-  return removeTomlSections(config, (header) => {
-    const prefix = "hooks.state.";
-    if (!header.startsWith(prefix)) return false;
-    const hookKey = parseJsonString(header.slice(prefix.length));
-    if (hookKey === null) return false;
-    const separator = hookKey.indexOf(":");
-    if (separator === -1) return false;
-    const pluginKey = hookKey.slice(0, separator);
-    const suffix = `@${marketplaceName}`;
-    if (!pluginKey.endsWith(suffix)) return false;
-    return !keepPluginNames.has(pluginKey.slice(0, -suffix.length));
-  });
-}
-function removeStaleManagedAgentBlocks(config, keepAgentNames) {
-  const managedAgentNames = new Set(MANAGED_CODEX_AGENT_NAMES);
-  return splitTomlSections(config).filter((section) => {
-    if (section.header === null) return true;
-    const agentName = parseAgentHeaderName(section.header);
-    if (agentName === null || !managedAgentNames.has(agentName) || keepAgentNames.has(agentName)) return true;
-    return !section.text.includes(`config_file = ${JSON.stringify(`./agents/${agentName}.toml`)}`);
-  }).map((section) => section.text).join("").replace(/\n{3,}/g, "\n\n");
-}
-function ensureFeatureEnabled2(config, featureName) {
-  const section = findTomlSection(config, "features");
-  if (!section) return appendBlock(config, `[features]
-${featureName} = true
-`);
-  return replaceOrInsertSetting(config, section, featureName, "true");
-}
-function ensureMarketplaceBlock(config, marketplaceName, source) {
-  const header = `marketplaces.${marketplaceName}`;
-  const block = [
-    `[${header}]`,
-    `last_updated = "${(/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z")}"`,
-    `source_type = ${JSON.stringify(source.sourceType)}`,
-    `source = ${JSON.stringify(source.source)}`,
-    source.ref === void 0 ? null : `ref = ${JSON.stringify(source.ref)}`,
-    ""
-  ].filter((line) => line !== null).join("\n");
-  const section = findTomlSection(config, header);
-  if (section) return config.slice(0, section.start) + block + config.slice(section.end);
-  return appendBlock(config, block);
-}
+// ../src/install/codex-config-plugins.ts
 function ensurePluginEnabled(config, pluginKey) {
   const header = `plugins.${JSON.stringify(pluginKey)}`;
   const section = findTomlSection(config, header);
-  if (!section) return appendBlock(config, `[${header}]
+  if (!section)
+    return appendBlock(config, `[${header}]
 enabled = true
 `);
   return replaceOrInsertSetting(config, section, "enabled", "true");
+}
+function ensureOmoBuiltinMcpPolicies(config, input) {
+  if (input.marketplaceName !== "sisyphuslabs" || !input.pluginNames.includes("omo"))
+    return config;
+  const gitBashEnabled = (input.platform ?? process.platform) === "win32" && input.gitBashEnabled === true;
+  let nextConfig = ensurePluginMcpEnabled(config, "omo@sisyphuslabs", "context7", true);
+  nextConfig = ensurePluginMcpEnabled(nextConfig, "omo@sisyphuslabs", "codegraph", true);
+  nextConfig = ensurePluginMcpEnabled(nextConfig, "omo@sisyphuslabs", "git_bash", gitBashEnabled);
+  return nextConfig;
+}
+function ensureHookTrusted(config, state) {
+  const header = `hooks.state.${JSON.stringify(state.key)}`;
+  const section = findTomlSection(config, header);
+  if (!section)
+    return appendBlock(config, `[${header}]
+trusted_hash = ${JSON.stringify(state.trustedHash)}
+`);
+  return replaceOrInsertSetting(config, section, "trusted_hash", JSON.stringify(state.trustedHash));
 }
 function ensurePluginMcpEnabled(config, pluginKey, serverName, enabled) {
   const header = `plugins.${JSON.stringify(pluginKey)}.mcp_servers.${serverName}`;
   const section = findTomlSection(config, header);
   const enabledValue = enabled ? "true" : "false";
-  if (!section) return appendBlock(config, `[${header}]
+  if (!section)
+    return appendBlock(config, `[${header}]
 enabled = ${enabledValue}
 `);
   return replaceOrInsertSetting(config, section, "enabled", enabledValue);
 }
-function ensureOmoBuiltinMcpPolicies(config, { marketplaceName, pluginNames, platform, gitBashEnabled }) {
-  if (marketplaceName !== "sisyphuslabs" || !pluginNames.includes("omo")) return config;
-  let nextConfig = ensurePluginMcpEnabled(config, "omo@sisyphuslabs", "context7", true);
-  nextConfig = ensurePluginMcpEnabled(nextConfig, "omo@sisyphuslabs", "git_bash", platform === "win32" && gitBashEnabled === true);
-  return nextConfig;
+
+// ../src/install/codex-config-reasoning.ts
+var MANAGED_KEYS = ["model", "model_context_window", "model_reasoning_effort", "plan_mode_reasoning_effort"];
+function ensureCodexReasoningConfig(config, catalog) {
+  const current = readRootReasoningSettings(config);
+  if (Object.keys(current).length > 0 && !matchesProfile(current, catalog.current) && !catalog.managedProfiles.some((profile) => matchesProfile(current, profile))) {
+    return config;
+  }
+  let next = replaceOrInsertRootSetting(config, "model", JSON.stringify(catalog.current.model));
+  next = replaceOrInsertRootSetting(next, "model_context_window", catalog.current.modelContextWindow.toString());
+  next = replaceOrInsertRootSetting(next, "model_reasoning_effort", JSON.stringify(catalog.current.modelReasoningEffort));
+  next = replaceOrInsertRootSetting(next, "plan_mode_reasoning_effort", JSON.stringify(catalog.current.planModeReasoningEffort));
+  return next;
 }
-function ensureHookTrusted(config, key, trustedHash) {
-  const header = `hooks.state.${JSON.stringify(key)}`;
-  const section = findTomlSection(config, header);
-  if (!section) return appendBlock(config, `[${header}]
-trusted_hash = ${JSON.stringify(trustedHash)}
-`);
-  return replaceOrInsertSetting(config, section, "trusted_hash", JSON.stringify(trustedHash));
-}
-function ensureAgentConfig(config, agentConfig) {
-  const header = `agents.${tomlKeySegment(agentConfig.name)}`;
-  const section = findTomlSection(config, header);
-  const configFile = JSON.stringify(agentConfig.configFile);
-  if (!section) return appendBlock(config, `[${header}]
-config_file = ${configFile}
-`);
-  return replaceOrInsertSetting(config, section, "config_file", configFile);
-}
-function tomlKeySegment(value) {
-  return /^[A-Za-z0-9_-]+$/.test(value) ? value : JSON.stringify(value);
-}
-function removeTomlSections(config, shouldRemove) {
-  return splitTomlSections(config).filter((section) => section.header === null || !shouldRemove(section.header)).map((section) => section.text).join("").replace(/\n{3,}/g, "\n\n");
-}
-function splitTomlSections(config) {
-  const lines = config.match(/[^\n]*\n?|$/g) ?? [];
-  const sections = [];
-  let current = { header: null, text: "" };
-  for (const line of lines) {
-    if (line.length === 0) break;
-    const header = parseTomlHeader2(line);
-    if (header !== null) {
-      if (current.text.length > 0) sections.push(current);
-      current = { header, text: line };
-    } else {
-      current.text += line;
+function readRootReasoningSettings(config) {
+  const settings = {};
+  for (const line of config.split(/\n/)) {
+    if (isSectionHeader2(line))
+      break;
+    for (const key of MANAGED_KEYS) {
+      if (!isRootSetting(line, key))
+        continue;
+      const value = parseTomlScalar(line.slice(line.indexOf("=") + 1));
+      if (key === "model" && typeof value === "string")
+        settings.model = value;
+      if (key === "model_context_window" && typeof value === "number")
+        settings.modelContextWindow = value;
+      if (key === "model_reasoning_effort" && typeof value === "string")
+        settings.modelReasoningEffort = value;
+      if (key === "plan_mode_reasoning_effort" && typeof value === "string")
+        settings.planModeReasoningEffort = value;
     }
   }
-  if (current.text.length > 0) sections.push(current);
-  return sections;
+  return settings;
 }
-function parseTomlHeader2(line) {
+function matchesProfile(current, profile) {
+  for (const [key, value] of Object.entries(profile)) {
+    if (current[key] !== value)
+      return false;
+  }
+  return true;
+}
+function parseTomlScalar(value) {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      if (error instanceof SyntaxError)
+        return;
+      throw error;
+    }
+  }
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+function isSectionHeader2(line) {
   const trimmed = line.trim();
-  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return null;
-  if (trimmed.startsWith("[[")) return null;
-  return trimmed.slice(1, -1);
+  return trimmed.startsWith("[") && trimmed.endsWith("]");
 }
-function parsePluginHeaderKey(header) {
-  const prefix = "plugins.";
-  if (!header.startsWith(prefix)) return null;
-  return parseLeadingJsonString2(header.slice(prefix.length));
+function isRootSetting(line, key) {
+  const trimmed = line.trimStart();
+  if (trimmed.startsWith("#") || trimmed.startsWith("["))
+    return false;
+  const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+  return match?.[1] === key;
 }
-function parseAgentHeaderName(header) {
-  const prefix = "agents.";
-  if (!header.startsWith(prefix)) return null;
-  const key = header.slice(prefix.length);
-  return key.startsWith('"') ? parseLeadingJsonString2(key) : key;
-}
-function parseLeadingJsonString2(value) {
-  if (!value.startsWith('"')) return parseJsonString(value);
-  let escaped = false;
-  for (let index = 1; index < value.length; index += 1) {
-    const char = value[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === '"') return parseJsonString(value.slice(0, index + 1));
-  }
-  return null;
-}
-function parseJsonString(value) {
+
+// ../src/install/codex-model-catalog.ts
+import { readFile as readFile8 } from "node:fs/promises";
+import { join as join14 } from "node:path";
+var FALLBACK_CODEX_MODEL_CATALOG = {
+  current: {
+    model: "gpt-5.5",
+    modelContextWindow: 400000,
+    modelReasoningEffort: "high",
+    planModeReasoningEffort: "xhigh"
+  },
+  managedProfiles: [
+    {
+      model: "gpt-5.5",
+      modelContextWindow: 1e6,
+      modelReasoningEffort: "high",
+      planModeReasoningEffort: "xhigh"
+    },
+    { model: "gpt-5.5", modelContextWindow: 272000 }
+  ]
+};
+async function readCodexModelCatalog(codexPackageRoot) {
+  const catalogPath = join14(codexPackageRoot, "plugin", "model-catalog.json");
   try {
-    const parsed = JSON.parse(value);
-    return typeof parsed === "string" ? parsed : null;
+    const parsed = JSON.parse(await readFile8(catalogPath, "utf8"));
+    return parseCodexModelCatalog(parsed) ?? FALLBACK_CODEX_MODEL_CATALOG;
   } catch (error) {
-    if (error instanceof Error) return null;
+    if (error instanceof Error)
+      return FALLBACK_CODEX_MODEL_CATALOG;
+    throw error;
+  }
+}
+function parseCodexModelCatalog(value) {
+  if (!isPlainRecord(value))
     return null;
+  const current = value["current"];
+  const managedProfiles = value["managedProfiles"];
+  if (!isPlainRecord(current) || !Array.isArray(managedProfiles))
+    return null;
+  const model = current["model"];
+  const modelContextWindow = current["model_context_window"];
+  const modelReasoningEffort = current["model_reasoning_effort"];
+  const planModeReasoningEffort = current["plan_mode_reasoning_effort"];
+  if (typeof model !== "string" || typeof modelContextWindow !== "number" || typeof modelReasoningEffort !== "string" || typeof planModeReasoningEffort !== "string") {
+    return null;
+  }
+  const parsedManagedProfiles = [];
+  for (const profile of managedProfiles) {
+    if (!isPlainRecord(profile))
+      return null;
+    const match = profile["match"];
+    if (!isPlainRecord(match))
+      return null;
+    parsedManagedProfiles.push(parseProfileMatch(match));
+  }
+  return {
+    current: { model, modelContextWindow, modelReasoningEffort, planModeReasoningEffort },
+    managedProfiles: parsedManagedProfiles
+  };
+}
+function parseProfileMatch(match) {
+  const profile = {};
+  if (typeof match["model"] === "string")
+    profile.model = match["model"];
+  if (typeof match["model_context_window"] === "number")
+    profile.modelContextWindow = match["model_context_window"];
+  if (typeof match["model_reasoning_effort"] === "string")
+    profile.modelReasoningEffort = match["model_reasoning_effort"];
+  if (typeof match["plan_mode_reasoning_effort"] === "string")
+    profile.planModeReasoningEffort = match["plan_mode_reasoning_effort"];
+  return profile;
+}
+
+// ../src/install/codex-multi-agent-v2-config.ts
+var CODEX_MULTI_AGENT_V2_HEADER = "features.multi_agent_v2";
+var CODEX_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION = 1e4;
+function ensureCodexMultiAgentV2Config(config) {
+  const normalizedConfig = removeLegacyAgentsMaxThreadsSetting(removeFeatureFlagSetting(config, "multi_agent_v2"));
+  const section = findTomlSection(normalizedConfig, CODEX_MULTI_AGENT_V2_HEADER);
+  const maxThreadsValue = CODEX_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION.toString();
+  if (!section) {
+    return appendBlock(normalizedConfig, `[${CODEX_MULTI_AGENT_V2_HEADER}]
+max_concurrent_threads_per_session = ${maxThreadsValue}
+`);
+  }
+  return replaceOrInsertSetting(normalizedConfig, section, "max_concurrent_threads_per_session", maxThreadsValue);
+}
+function removeFeatureFlagSetting(config, featureName) {
+  const section = findTomlSection(config, "features");
+  if (!section)
+    return config;
+  return removeSetting(config, section, featureName);
+}
+function removeLegacyAgentsMaxThreadsSetting(config) {
+  const section = findTomlSection(config, "agents");
+  if (!section)
+    return config;
+  return removeSetting(config, section, "max_threads");
+}
+
+// ../src/install/codex-config-toml.ts
+async function updateCodexConfig(input) {
+  await mkdir6(dirname6(input.configPath), { recursive: true });
+  let config = "";
+  if (await exists3(input.configPath))
+    config = await readFile9(input.configPath, "utf8");
+  const pluginSet = new Set(input.pluginNames);
+  for (const legacyMarketplaceName of legacyMarketplaceNames(input.marketplaceName)) {
+    config = removeMarketplaceBlock(config, legacyMarketplaceName);
+    config = removeStaleMarketplacePluginBlocks(config, legacyMarketplaceName, new Set);
+    config = removeStaleMarketplaceHookStateBlocks(config, legacyMarketplaceName, new Set);
+  }
+  config = removeStaleMarketplacePluginBlocks(config, input.marketplaceName, pluginSet);
+  config = removeStaleMarketplaceHookStateBlocks(config, input.marketplaceName, pluginSet);
+  config = removeStaleManagedAgentBlocks(config, new Set((input.agentConfigs ?? []).map((agentConfig) => agentConfig.name)));
+  config = ensureFeatureEnabled(config, "plugins");
+  config = ensureFeatureEnabled(config, "plugin_hooks");
+  config = ensureFeatureEnabled(config, "multi_agent");
+  config = ensureFeatureEnabled(config, "child_agents_md");
+  config = ensureCodexReasoningConfig(config, await readCodexModelCatalog(input.repoRoot));
+  config = ensureCodexMultiAgentV2Config(config);
+  if (input.autonomousPermissions === true)
+    config = ensureAutonomousPermissions(config);
+  if (!(input.preserveMarketplaceSource === true && hasMarketplaceBlock(config, input.marketplaceName))) {
+    config = ensureMarketplaceBlock(config, input.marketplaceName, input.marketplaceSource);
+  }
+  for (const pluginName of input.pluginNames) {
+    config = ensurePluginEnabled(config, `${pluginName}@${input.marketplaceName}`);
+  }
+  config = ensureOmoBuiltinMcpPolicies(config, input);
+  for (const state of input.trustedHookStates ?? []) {
+    config = ensureHookTrusted(config, state);
+  }
+  for (const agentConfig of input.agentConfigs ?? []) {
+    config = ensureAgentConfig(config, agentConfig);
+  }
+  await writeFileAtomic(input.configPath, `${config.trimEnd()}
+`);
+}
+async function exists3(path) {
+  try {
+    await readFile9(path, "utf8");
+    return true;
+  } catch (error) {
+    if (error instanceof Error)
+      return false;
+    return false;
   }
 }
 
-// ../../../scripts/install/git-bash-mcp-env.mjs
+// ../src/install/codex-git-bash-mcp-env.ts
 import { readFile as readFile10, writeFile as writeFile6 } from "node:fs/promises";
-import { join as join12 } from "node:path";
+import { join as join15 } from "node:path";
 var GIT_BASH_ENV_KEY = "OMO_CODEX_GIT_BASH_PATH";
-async function stampGitBashMcpEnv({ pluginRoot, env = process.env, platform = process.platform }) {
-  if (platform !== "win32") return false;
-  const override = typeof env[GIT_BASH_ENV_KEY] === "string" ? env[GIT_BASH_ENV_KEY].trim() : "";
-  if (override === "") return false;
-  const manifestPath = join12(pluginRoot, ".mcp.json");
-  if (!await exists(manifestPath)) return false;
+async function stampGitBashMcpEnv(input) {
+  if (input.platform !== "win32")
+    return false;
+  const rawOverride = input.env?.[GIT_BASH_ENV_KEY];
+  const override = typeof rawOverride === "string" ? rawOverride.trim() : "";
+  if (override === "")
+    return false;
+  const manifestPath = join15(input.pluginRoot, ".mcp.json");
+  if (!await fileExistsStrict(manifestPath))
+    return false;
   const parsed = JSON.parse(await readFile10(manifestPath, "utf8"));
-  if (!isRecord2(parsed) || !isRecord2(parsed.mcpServers) || !isRecord2(parsed.mcpServers.git_bash)) return false;
-  const server = parsed.mcpServers.git_bash;
-  const serverEnv = isRecord2(server.env) ? server.env : {};
-  if (serverEnv[GIT_BASH_ENV_KEY] === override) return false;
-  server.env = { ...serverEnv, [GIT_BASH_ENV_KEY]: override };
-  await writeFile6(manifestPath, `${JSON.stringify(parsed, null, "	")}
+  if (!isPlainRecord(parsed) || !isPlainRecord(parsed["mcpServers"]))
+    return false;
+  const gitBashServer = parsed["mcpServers"]["git_bash"];
+  if (!isPlainRecord(gitBashServer))
+    return false;
+  const serverEnv = isPlainRecord(gitBashServer["env"]) ? gitBashServer["env"] : {};
+  if (serverEnv[GIT_BASH_ENV_KEY] === override)
+    return false;
+  gitBashServer["env"] = { ...serverEnv, [GIT_BASH_ENV_KEY]: override };
+  await writeFile6(manifestPath, `${JSON.stringify(parsed, null, "\t")}
 `);
   return true;
 }
 
-// ../../../scripts/install/git-bash.mjs
-import { execFileSync } from "node:child_process";
-import { existsSync as existsSync2 } from "node:fs";
-var GIT_BASH_ENV_KEY2 = "OMO_CODEX_GIT_BASH_PATH";
-var SKIP_GIT_BASH_AUTO_INSTALL_ENV_KEY = "OMO_CODEX_SKIP_GIT_BASH_AUTO_INSTALL";
-var PROGRAM_FILES_GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
-var PROGRAM_FILES_X86_GIT_BASH = "C:\\Program Files (x86)\\Git\\bin\\bash.exe";
-var WINGET_INSTALL_ARGS = ["install", "--id", "Git.Git", "-e", "--source", "winget"];
-function resolveGitBash({ platform, env, exists: exists2, where }) {
-  if (platform !== "win32") return { found: true, path: null, source: "not-required", checkedPaths: [] };
-  const checkedPaths = [];
-  const envPath = nonEmptyEnvValue2(env, GIT_BASH_ENV_KEY2);
-  if (envPath !== void 0) {
-    checkedPaths.push(envPath);
-    if (isBashExePath(envPath) && exists2(envPath)) return { found: true, path: envPath, source: "env", checkedPaths };
-    return missingGitBash(checkedPaths);
-  }
-  for (const candidate of [
-    { path: PROGRAM_FILES_GIT_BASH, source: "program-files" },
-    { path: PROGRAM_FILES_X86_GIT_BASH, source: "program-files-x86" }
-  ]) {
-    checkedPaths.push(candidate.path);
-    if (exists2(candidate.path)) return { found: true, path: candidate.path, source: candidate.source, checkedPaths };
-  }
-  for (const pathCandidate of where("bash")) {
-    const candidate = pathCandidate.trim();
-    if (candidate.length === 0) continue;
-    checkedPaths.push(candidate);
-    if (isKnownNonGitBashLauncher(candidate)) continue;
-    if (isBashExePath(candidate) && exists2(candidate)) return { found: true, path: candidate, source: "path", checkedPaths };
-  }
-  return missingGitBash(checkedPaths);
-}
-function resolveGitBashForCurrentProcess(options = {}) {
-  return resolveGitBash({
-    platform: options.platform ?? process.platform,
-    env: options.env ?? process.env,
-    exists: existsSync2,
-    where: whereCommand
-  });
-}
-async function prepareGitBashForInstall(options) {
-  const resolveGitBashWithDefaults = options.resolveGitBash ?? (() => resolveGitBashForCurrentProcess({ platform: options.platform, env: options.env }));
-  const initialResolution = resolveGitBashWithDefaults();
-  if (options.platform !== "win32" || initialResolution.found) return initialResolution;
-  if (options.env[SKIP_GIT_BASH_AUTO_INSTALL_ENV_KEY] === "1") return initialResolution;
-  try {
-    await options.runCommand("winget", WINGET_INSTALL_ARGS, { cwd: options.cwd });
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    return initialResolution;
-  }
-  return resolveGitBashWithDefaults();
-}
-function missingGitBash(checkedPaths) {
-  return {
-    found: false,
-    checkedPaths,
-    installHint: [
-      "Git Bash is required for native Windows Codex profile installs.",
-      "Install it with: winget install --id Git.Git -e --source winget",
-      `For a custom install, set ${GIT_BASH_ENV_KEY2}=C:\\path\\to\\bash.exe`,
-      "Then rerun `npx lazycodex-ai install`."
-    ].join("\n")
-  };
-}
-function nonEmptyEnvValue2(env, key) {
-  const value = env[key];
-  if (typeof value !== "string") return void 0;
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? void 0 : trimmed;
-}
-function isBashExePath(path) {
-  return path.toLowerCase().endsWith("bash.exe");
-}
-var NON_GIT_BASH_LAUNCHER_DIR_SEGMENTS = ["\\windows\\system32\\", "\\microsoft\\windowsapps\\"];
-function isKnownNonGitBashLauncher(path) {
-  const normalized = path.replaceAll("/", "\\").toLowerCase();
-  return NON_GIT_BASH_LAUNCHER_DIR_SEGMENTS.some((segment) => normalized.includes(segment));
-}
-function whereCommand(command) {
-  try {
-    return execFileSync("where", [command], { encoding: "utf8" }).split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-  } catch (error) {
-    if (error instanceof Error) return [];
-    throw error;
-  }
-}
-
-// ../../../scripts/install/hook-trust.mjs
-import { createHash as createHash2 } from "node:crypto";
+// ../src/install/codex-hook-trust.ts
+import { createHash as createHash3 } from "node:crypto";
 import { readFile as readFile11 } from "node:fs/promises";
-import { join as join13 } from "node:path";
-var EVENT_LABELS = /* @__PURE__ */ new Map([
+import { join as join16 } from "node:path";
+var EVENT_LABELS = new Map([
   ["PreToolUse", "pre_tool_use"],
   ["PermissionRequest", "permission_request"],
   ["PostToolUse", "post_tool_use"],
@@ -1965,57 +2185,65 @@ var EVENT_LABELS = /* @__PURE__ */ new Map([
   ["SubagentStop", "subagent_stop"],
   ["Stop", "stop"]
 ]);
-async function trustedHookStatesForPlugin({ marketplaceName, pluginName, pluginRoot }) {
-  const manifestPath = join13(pluginRoot, ".codex-plugin", "plugin.json");
-  if (!await exists(manifestPath)) return [];
+async function trustedHookStatesForPlugin(input) {
+  const manifestPath = join16(input.pluginRoot, ".codex-plugin", "plugin.json");
+  if (!await exists4(manifestPath))
+    return [];
   const manifest = JSON.parse(await readFile11(manifestPath, "utf8"));
-  if (!isRecord2(manifest) || typeof manifest.hooks !== "string") return [];
-  const hooksPath = join13(pluginRoot, manifest.hooks);
-  if (!await exists(hooksPath)) return [];
+  if (!isPlainRecord(manifest) || typeof manifest.hooks !== "string")
+    return [];
+  const hooksPath = join16(input.pluginRoot, manifest.hooks);
+  if (!await exists4(hooksPath))
+    return [];
   const parsed = JSON.parse(await readFile11(hooksPath, "utf8"));
-  if (!isRecord2(parsed) || !isRecord2(parsed.hooks)) return [];
-  const keySource = `${pluginName}@${marketplaceName}:${stripDotSlash(manifest.hooks)}`;
+  if (!isPlainRecord(parsed) || !isPlainRecord(parsed.hooks))
+    return [];
+  const keySource = `${input.pluginName}@${input.marketplaceName}:${stripDotSlash(manifest.hooks)}`;
   const states = [];
   for (const [eventName, groups] of Object.entries(parsed.hooks)) {
-    if (!Array.isArray(groups)) continue;
+    if (!Array.isArray(groups))
+      continue;
     const eventLabel = EVENT_LABELS.get(eventName);
-    if (eventLabel === void 0) continue;
+    if (eventLabel === undefined)
+      continue;
     for (const [groupIndex, group] of groups.entries()) {
-      if (!isRecord2(group) || !Array.isArray(group.hooks)) continue;
+      if (!isPlainRecord(group) || !Array.isArray(group.hooks))
+        continue;
       for (const [handlerIndex, handler] of group.hooks.entries()) {
-        if (!isRecord2(handler) || handler.type !== "command") continue;
-        if (handler.async === true) continue;
-        if (typeof handler.command !== "string" || handler.command.trim() === "") continue;
+        if (!isPlainRecord(handler) || handler.type !== "command")
+          continue;
+        if (handler.async === true)
+          continue;
+        if (typeof handler.command !== "string" || handler.command.trim() === "")
+          continue;
         const key = `${keySource}:${eventLabel}:${groupIndex}:${handlerIndex}`;
-        states.push({
-          key,
-          trustedHash: commandHookHash(eventLabel, group.matcher, handler)
-        });
+        states.push({ key, trustedHash: commandHookHash(eventLabel, group.matcher, handler) });
       }
     }
   }
   return states;
 }
 function commandHookHash(eventName, matcher, handler) {
-  const command = handler.command;
   const timeout = Math.max(Number(handler.timeout ?? 600), 1);
   const normalizedHandler = {
     type: "command",
-    command,
+    command: handler.command,
     timeout,
     async: false
   };
-  if (typeof handler.statusMessage === "string") normalizedHandler.statusMessage = handler.statusMessage;
-  const identity = {
-    event_name: eventName,
-    hooks: [normalizedHandler]
-  };
-  if (typeof matcher === "string") identity.matcher = matcher;
-  return `sha256:${createHash2("sha256").update(JSON.stringify(canonicalJson(identity))).digest("hex")}`;
+  if (typeof handler.statusMessage === "string")
+    normalizedHandler.statusMessage = handler.statusMessage;
+  const identity = { event_name: eventName, hooks: [normalizedHandler] };
+  if (typeof matcher === "string")
+    identity.matcher = matcher;
+  const canonical = JSON.stringify(canonicalJson(identity));
+  return `sha256:${createHash3("sha256").update(canonical).digest("hex")}`;
 }
 function canonicalJson(value) {
-  if (Array.isArray(value)) return value.map(canonicalJson);
-  if (!isRecord2(value)) return value;
+  if (Array.isArray(value))
+    return value.map(canonicalJson);
+  if (!isPlainRecord(value))
+    return value;
   const result = {};
   for (const key of Object.keys(value).sort()) {
     result[key] = canonicalJson(value[key]);
@@ -2025,8 +2253,156 @@ function canonicalJson(value) {
 function stripDotSlash(value) {
   return value.startsWith("./") ? value.slice(2) : value;
 }
+async function exists4(path) {
+  try {
+    await readFile11(path, "utf8");
+    return true;
+  } catch (error) {
+    if (error instanceof Error)
+      return false;
+    return false;
+  }
+}
 
-// src/setup.ts
+// ../src/install/codex-installer-bin-dir.ts
+import { homedir as homedir3 } from "node:os";
+import { join as join17, resolve as resolve5 } from "node:path";
+function resolveCodexInstallerBinDir(input) {
+  const explicitBinDir = input.binDir ?? input.env?.CODEX_LOCAL_BIN_DIR;
+  if (explicitBinDir !== undefined && explicitBinDir.trim().length > 0)
+    return resolve5(explicitBinDir.trim());
+  const homeDir = input.homeDir ?? homedir3();
+  const defaultCodexHome = resolve5(homeDir, ".codex");
+  const resolvedCodexHome = resolve5(input.codexHome);
+  if (resolvedCodexHome !== defaultCodexHome)
+    return join17(resolvedCodexHome, "bin");
+  return resolve5(homeDir, ".local", "bin");
+}
+// ../../utils/src/runtime/git-bash.ts
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { existsSync as existsSync2 } from "node:fs";
+var GIT_BASH_ENV_KEY2 = "OMO_CODEX_GIT_BASH_PATH";
+var WINGET_INSTALL_ARGS = ["install", "--id", "Git.Git", "-e", "--source", "winget"];
+var PROGRAM_FILES_GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
+var PROGRAM_FILES_X86_GIT_BASH = "C:\\Program Files (x86)\\Git\\bin\\bash.exe";
+var NON_GIT_BASH_LAUNCHER_DIR_SEGMENTS = ["\\windows\\system32\\", "\\microsoft\\windowsapps\\"];
+function resolveGitBash(input) {
+  if (input.platform !== "win32")
+    return { found: true, path: null, source: "not-required", checkedPaths: [] };
+  const checkedPaths = [];
+  const envPath = nonEmptyEnvValue(input.env, GIT_BASH_ENV_KEY2);
+  if (envPath !== undefined) {
+    checkedPaths.push(envPath);
+    if (isBashExePath(envPath) && input.exists(envPath)) {
+      return { found: true, path: envPath, source: "env", checkedPaths };
+    }
+    return missingGitBash(checkedPaths);
+  }
+  for (const candidate of [
+    { path: PROGRAM_FILES_GIT_BASH, source: "program-files" },
+    { path: PROGRAM_FILES_X86_GIT_BASH, source: "program-files-x86" }
+  ]) {
+    checkedPaths.push(candidate.path);
+    if (input.exists(candidate.path))
+      return { found: true, path: candidate.path, source: candidate.source, checkedPaths };
+  }
+  for (const pathCandidate of input.where("bash")) {
+    const candidate = pathCandidate.trim();
+    if (candidate.length === 0)
+      continue;
+    checkedPaths.push(candidate);
+    if (isKnownNonGitBashLauncher(candidate))
+      continue;
+    if (isBashExePath(candidate) && input.exists(candidate))
+      return { found: true, path: candidate, source: "path", checkedPaths };
+  }
+  return missingGitBash(checkedPaths);
+}
+var resolveGitBashForCurrentProcess = (input = {}) => {
+  return resolveGitBash({
+    platform: input.platform ?? process.platform,
+    env: input.env ?? process.env,
+    exists: existsSync2,
+    where: whereCommand
+  });
+};
+function missingGitBash(checkedPaths) {
+  return {
+    found: false,
+    checkedPaths,
+    installHint: [
+      "Git Bash is required on native Windows.",
+      "Install it with: winget install --id Git.Git -e --source winget",
+      `For a custom install, set ${GIT_BASH_ENV_KEY2}=C:\\path\\to\\bash.exe`
+    ].join(`
+`)
+  };
+}
+function nonEmptyEnvValue(env, key) {
+  const value = env[key];
+  if (value === undefined)
+    return;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+function isBashExePath(path) {
+  return path.toLowerCase().endsWith("bash.exe");
+}
+function isKnownNonGitBashLauncher(path) {
+  const normalized = path.replaceAll("/", "\\").toLowerCase();
+  return NON_GIT_BASH_LAUNCHER_DIR_SEGMENTS.some((segment) => normalized.includes(segment));
+}
+function whereCommand(command) {
+  try {
+    return execFileSync2("where", [command], { encoding: "utf8" }).split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  } catch (error) {
+    if (error instanceof Error)
+      return [];
+    throw error;
+  }
+}
+// ../src/install/git-bash.ts
+var SKIP_GIT_BASH_AUTO_INSTALL_ENV_KEY = "OMO_CODEX_SKIP_GIT_BASH_AUTO_INSTALL";
+var resolveGitBashForCurrentProcess2 = (input = {}) => {
+  return toCodexResolution(resolveGitBashForCurrentProcess(input));
+};
+async function prepareGitBashForInstall(input) {
+  const resolve6 = input.resolveGitBash ?? (() => resolveGitBashForCurrentProcess2({ platform: input.platform, env: input.env }));
+  const initialResolution = resolve6();
+  if (input.platform !== "win32" || initialResolution.found)
+    return initialResolution;
+  if (input.env[SKIP_GIT_BASH_AUTO_INSTALL_ENV_KEY] === "1")
+    return initialResolution;
+  try {
+    await input.runCommand("winget", WINGET_INSTALL_ARGS, { cwd: input.cwd });
+  } catch (error) {
+    if (!(error instanceof Error))
+      throw error;
+    return initialResolution;
+  }
+  return resolve6();
+}
+function toCodexResolution(resolution) {
+  if (resolution.found) {
+    return {
+      found: true,
+      path: resolution.path,
+      source: resolution.source
+    };
+  }
+  return {
+    ...resolution,
+    installHint: [
+      "Git Bash is required for native Windows Codex profile installs.",
+      "Install it with: winget install --id Git.Git -e --source winget",
+      `For a custom install, set ${GIT_BASH_ENV_KEY2}=C:\\path\\to\\bash.exe`,
+      "Then rerun `npx lazycodex-ai install`."
+    ].join(`
+`)
+  };
+}
+
+// components/bootstrap/src/setup.ts
 var SETUP_MARKETPLACE_NAME = "sisyphuslabs";
 var SETUP_PLUGIN_NAME = "omo";
 var GIT_BASH_INSTALL_HINT = "winget install --id Git.Git -e --source winget";
@@ -2041,16 +2417,18 @@ async function runWorkerSetup(options) {
   return { degraded };
 }
 async function resolveGitBashStep(options, degraded) {
-  if (options.platform !== "win32") return false;
+  if (options.platform !== "win32")
+    return false;
   try {
     const resolution = await prepareGitBashForInstall({
       cwd: options.pluginRoot,
       env: options.env,
       platform: options.platform,
       runCommand: options.runCommand ?? defaultRunCommand,
-      ...options.resolveGitBash === void 0 ? {} : { resolveGitBash: options.resolveGitBash }
+      ...options.resolveGitBash === undefined ? {} : { resolveGitBash: options.resolveGitBash }
     });
-    if (resolution.found) return true;
+    if (resolution.found)
+      return true;
     degraded.push({
       component: "git-bash",
       hint: GIT_BASH_INSTALL_HINT,
@@ -2066,9 +2444,9 @@ async function resolveGitBashStep(options, degraded) {
   return false;
 }
 async function linkBundledAgentsStep(options) {
-  const agentsTarget = join14(options.codexHome, "agents");
+  const agentsTarget = join18(options.codexHome, "agents");
   try {
-    const stageRoot = join14(options.pluginData, "bootstrap", "agents-stage");
+    const stageRoot = join18(options.pluginData, "bootstrap", "agents-stage");
     await stageBundledAgents(options.pluginRoot, stageRoot);
     const preservedReasoning = await capturePreservedAgentReasoning({ codexHome: options.codexHome });
     const preservedServiceTier = await capturePreservedAgentServiceTier({ codexHome: options.codexHome });
@@ -2094,22 +2472,23 @@ async function linkBundledAgentsStep(options) {
   }
 }
 async function stageBundledAgents(pluginRoot, stageRoot) {
-  await rm7(stageRoot, { force: true, recursive: true });
+  await rm9(stageRoot, { force: true, recursive: true });
   await mkdir7(stageRoot, { recursive: true });
-  const componentsRoot = join14(pluginRoot, "components");
+  const componentsRoot = join18(pluginRoot, "components");
   for (const componentName of await directoryNames(componentsRoot)) {
-    const agentsDir = join14(componentsRoot, componentName, "agents");
+    const agentsDir = join18(componentsRoot, componentName, "agents");
     const agentFiles = (await fileNames(agentsDir)).filter((name) => name.endsWith(".toml"));
-    if (agentFiles.length === 0) continue;
-    const stagedAgentsDir = join14(stageRoot, "components", componentName, "agents");
+    if (agentFiles.length === 0)
+      continue;
+    const stagedAgentsDir = join18(stageRoot, "components", componentName, "agents");
     await mkdir7(stagedAgentsDir, { recursive: true });
     for (const agentFile of agentFiles) {
-      await copyFile2(join14(agentsDir, agentFile), join14(stagedAgentsDir, agentFile));
+      await copyFile2(join18(agentsDir, agentFile), join18(stagedAgentsDir, agentFile));
     }
   }
 }
 async function updateConfigStep(options, inputs, degraded) {
-  const configPath = join14(options.codexHome, "config.toml");
+  const configPath = join18(options.codexHome, "config.toml");
   try {
     await assertWritableConfigIfPresent(configPath);
     const trustedHookStates = await trustedHookStatesForPlugin({
@@ -2119,18 +2498,14 @@ async function updateConfigStep(options, inputs, degraded) {
     });
     await updateCodexConfig({
       agentConfigs: inputs.agentConfigs,
-      // Hard invariant: the bootstrap worker NEVER writes permission keys
-      // (approval/sandbox/network policies stay installer-flag-only).
       autonomousPermissions: false,
       configPath,
       gitBashEnabled: inputs.gitBashEnabled,
       marketplaceName: SETUP_MARKETPLACE_NAME,
+      marketplaceSource: { sourceType: "local", source: options.pluginRoot },
       platform: options.platform,
       pluginNames: [SETUP_PLUGIN_NAME],
       preserveMarketplaceSource: true,
-      // The marketplace plugin tree has no <root>/plugin/model-catalog.json,
-      // so updateCodexConfig falls back to the catalog bundled into this
-      // dist; bootstrap-setup.test.mjs guards against drift between the two.
       repoRoot: options.pluginRoot,
       trustedHookStates
     });
@@ -2144,14 +2519,16 @@ async function updateConfigStep(options, inputs, degraded) {
 }
 async function assertWritableConfigIfPresent(configPath) {
   try {
-    if (((await stat4(configPath)).mode & 146) === 0) throw new Error(`${configPath} has no write permission bits set`);
+    if (((await stat4(configPath)).mode & 146) === 0)
+      throw new Error(`${configPath} has no write permission bits set`);
   } catch (error) {
-    if (errorCode(error) === "ENOENT") return;
+    if (errorCode(error) === "ENOENT")
+      return;
     throw error;
   }
 }
 function errorCode(error) {
-  return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : void 0;
+  return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
 }
 async function linkComponentBinsStep(options, degraded) {
   const binDir = resolveCodexInstallerBinDir({ codexHome: options.codexHome, env: options.env });
@@ -2167,7 +2544,7 @@ async function linkComponentBinsStep(options, degraded) {
   await linkRuntimeWrapperStep(options, binDir, degraded);
 }
 async function linkRuntimeWrapperStep(options, binDir, degraded) {
-  const cliPath = join14(options.pluginRoot, "dist", "cli", "index.js");
+  const cliPath = join18(options.pluginRoot, "dist", "cli", "index.js");
   try {
     const linked = await linkRootRuntimeBin({
       binDir,
@@ -2175,7 +2552,8 @@ async function linkRuntimeWrapperStep(options, binDir, degraded) {
       platform: options.platform,
       repoRoot: options.pluginRoot
     });
-    if (linked !== null) return;
+    if (linked !== null)
+      return;
     degraded.push({
       component: "omo-cli",
       hint: "use npx lazycodex-ai for the omo CLI",
@@ -2199,7 +2577,7 @@ async function stampGitBashEnvStep(options, degraded) {
     degraded.push({
       component: "git-bash-env",
       hint: BOOTSTRAP_DOCTOR_HINT,
-      reason: `failed to stamp ${join14(options.pluginRoot, ".mcp.json")}: ${errorMessage(error)}`
+      reason: `failed to stamp ${join18(options.pluginRoot, ".mcp.json")}: ${errorMessage(error)}`
     });
   }
 }
@@ -2218,7 +2596,8 @@ async function entryNames(root, keep) {
     const entries = await readdir3(root, { withFileTypes: true });
     return entries.filter((entry) => keep(entry)).map((entry) => entry.name).sort();
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return [];
     throw error;
   }
 }
@@ -2229,14 +2608,14 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-// src/worker.ts
+// components/bootstrap/src/worker.ts
 var BOOTSTRAP_DOCTOR_HINT = "npx lazycodex-ai doctor";
 function parseWorkerFlags(argv) {
   let codexHome;
   let manifestDir;
   let once = false;
   let only;
-  for (let index = 0; index < argv.length; index += 1) {
+  for (let index = 0;index < argv.length; index += 1) {
     const flag = argv[index];
     if (flag === "--once") {
       once = true;
@@ -2261,41 +2640,44 @@ function parseWorkerFlags(argv) {
   }
   return {
     once,
-    ...codexHome === void 0 ? {} : { codexHome },
-    ...manifestDir === void 0 ? {} : { manifestDir },
-    ...only === void 0 ? {} : { only }
+    ...codexHome === undefined ? {} : { codexHome },
+    ...manifestDir === undefined ? {} : { manifestDir },
+    ...only === undefined ? {} : { only }
   };
 }
 function resolvePluginDataRoot(env) {
   const fromEnv = env["PLUGIN_DATA"]?.trim();
-  if (fromEnv !== void 0 && fromEnv.length > 0) return fromEnv;
-  return join15(homedir4(), ".local", "share", "lazycodex");
+  if (fromEnv !== undefined && fromEnv.length > 0)
+    return fromEnv;
+  return join19(homedir4(), ".local", "share", "lazycodex");
 }
 async function readPluginVersion(pluginRoot) {
   try {
-    const parsed = JSON.parse(await readFile12(join15(pluginRoot, ".codex-plugin", "plugin.json"), "utf8"));
-    if (typeof parsed !== "object" || parsed === null) return void 0;
+    const parsed = JSON.parse(await readFile12(join19(pluginRoot, ".codex-plugin", "plugin.json"), "utf8"));
+    if (typeof parsed !== "object" || parsed === null)
+      return;
     const version = parsed["version"];
-    if (typeof version !== "string") return void 0;
+    if (typeof version !== "string")
+      return;
     const trimmed = version.trim();
-    return trimmed.length > 0 ? trimmed : void 0;
+    return trimmed.length > 0 ? trimmed : undefined;
   } catch {
-    return void 0;
+    return;
   }
 }
 async function readBootstrapState(statePath) {
   return parseBootstrapState(await readState(statePath));
 }
 function parseBootstrapState(raw) {
-  const completedForVersion = typeof raw["completedForVersion"] === "string" ? raw["completedForVersion"] : void 0;
-  const lastAttemptAt = typeof raw["lastAttemptAt"] === "number" ? raw["lastAttemptAt"] : void 0;
-  const lastStatus = raw["lastStatus"] === "success" || raw["lastStatus"] === "degraded" ? raw["lastStatus"] : void 0;
+  const completedForVersion = typeof raw["completedForVersion"] === "string" ? raw["completedForVersion"] : undefined;
+  const lastAttemptAt = typeof raw["lastAttemptAt"] === "number" ? raw["lastAttemptAt"] : undefined;
+  const lastStatus = raw["lastStatus"] === "success" || raw["lastStatus"] === "degraded" ? raw["lastStatus"] : undefined;
   const degraded = parseDegradedEntries(raw["degraded"]);
   return {
-    ...completedForVersion === void 0 ? {} : { completedForVersion },
-    ...lastAttemptAt === void 0 ? {} : { lastAttemptAt },
-    ...lastStatus === void 0 ? {} : { lastStatus },
-    ...degraded === void 0 ? {} : { degraded }
+    ...completedForVersion === undefined ? {} : { completedForVersion },
+    ...lastAttemptAt === undefined ? {} : { lastAttemptAt },
+    ...lastStatus === undefined ? {} : { lastStatus },
+    ...degraded === undefined ? {} : { degraded }
   };
 }
 function defaultWorkerSteps(seams = {}) {
@@ -2321,11 +2703,12 @@ async function runBootstrapWorker(options = {}) {
   const statePath = resolveBootstrapStatePath(pluginData);
   const lockEnv = { ...env, PLUGIN_DATA: pluginData };
   const locks = await bootstrapLocks({ env: lockEnv, now, pluginData });
-  if (locks === null) return { ran: false, reason: "locked" };
+  if (locks === null)
+    return { ran: false, reason: "locked" };
   try {
     const pluginVersion = await readPluginVersion(pluginRoot);
     const marker = await readBootstrapState(statePath);
-    if (!flags.once && pluginVersion !== void 0 && marker.completedForVersion === pluginVersion) {
+    if (!flags.once && pluginVersion !== undefined && marker.completedForVersion === pluginVersion) {
       await appendBootstrapLog(pluginData, now, "worker-skipped", { reason: "already-completed", version: pluginVersion });
       return { ran: false, reason: "already-completed" };
     }
@@ -2333,20 +2716,21 @@ async function runBootstrapWorker(options = {}) {
     const context = { codexHome, env, flags, now, platform, pluginData, pluginRoot, pluginVersion };
     await appendBootstrapLog(pluginData, now, "worker-started", { version: pluginVersion ?? "unknown" });
     const degraded = [];
-    if (pluginVersion === void 0) {
+    if (pluginVersion === undefined) {
       degraded.push({
         component: "bootstrap",
         hint: BOOTSTRAP_DOCTOR_HINT,
-        reason: `plugin version unresolved from ${join15(pluginRoot, ".codex-plugin", "plugin.json")}`
+        reason: `plugin version unresolved from ${join19(pluginRoot, ".codex-plugin", "plugin.json")}`
       });
     }
     for (const step of steps) {
-      if (flags.only !== void 0 && step.name !== flags.only) continue;
+      if (flags.only !== undefined && step.name !== flags.only)
+        continue;
       degraded.push(...await runStep(step, context));
     }
     const status = degraded.length === 0 ? "success" : "degraded";
     const state = {
-      ...pluginVersion === void 0 ? {} : { completedForVersion: pluginVersion },
+      ...pluginVersion === undefined ? {} : { completedForVersion: pluginVersion },
       degraded,
       lastAttemptAt: now,
       lastStatus: status
@@ -2373,25 +2757,28 @@ async function runStep(step, context) {
 }
 function resolvePluginRoot(env) {
   const fromEnv = env["PLUGIN_ROOT"]?.trim();
-  if (fromEnv !== void 0 && fromEnv.length > 0) return fromEnv;
-  return resolve5(dirname8(fileURLToPath2(import.meta.url)), "..", "..", "..");
+  if (fromEnv !== undefined && fromEnv.length > 0)
+    return fromEnv;
+  return resolve6(dirname7(fileURLToPath2(import.meta.url)), "..", "..", "..");
 }
 async function appendBootstrapLog(pluginData, now, event, details) {
   try {
-    const logPath = join15(pluginData, "bootstrap", "bootstrap.log");
-    await mkdir8(dirname8(logPath), { recursive: true });
+    const logPath = join19(pluginData, "bootstrap", "bootstrap.log");
+    await mkdir8(dirname7(logPath), { recursive: true });
     await appendFile2(logPath, `${JSON.stringify({ timestamp: new Date(now).toISOString(), event, ...details })}
 `);
-  } catch {
-  }
+  } catch {}
 }
 function parseDegradedEntries(raw) {
-  if (!Array.isArray(raw)) return void 0;
+  if (!Array.isArray(raw))
+    return;
   const entries = [];
   for (const candidate of raw) {
-    if (typeof candidate !== "object" || candidate === null) continue;
+    if (typeof candidate !== "object" || candidate === null)
+      continue;
     const record = candidate;
-    if (typeof record["component"] !== "string" || typeof record["reason"] !== "string") continue;
+    if (typeof record["component"] !== "string" || typeof record["reason"] !== "string")
+      continue;
     entries.push({
       component: record["component"],
       reason: record["reason"],
@@ -2402,30 +2789,34 @@ function parseDegradedEntries(raw) {
 }
 function requireFlagValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (value === void 0 || value.startsWith("--")) {
+  if (value === undefined || value.startsWith("--")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
 }
 
-// src/hook.ts
-var BOOTSTRAP_RESTART_NOTICE = "LazyCodex bootstrap running in background \u2014 restart the session when it completes";
+// components/bootstrap/src/hook.ts
+var BOOTSTRAP_RESTART_NOTICE = "LazyCodex bootstrap running in background — restart the session when it completes";
 async function runSessionStartHook(options) {
   return (await executeSessionStartHook(options)).exitCode;
 }
 async function executeSessionStartHook(options) {
-  if (options.stdin !== void 0) await drainStdin(options.stdin);
+  if (options.stdin !== undefined)
+    await drainStdin(options.stdin);
   const now = options.now ?? Date.now();
   const pluginRoot = options.env["PLUGIN_ROOT"]?.trim();
   const pluginData = options.env["PLUGIN_DATA"]?.trim();
-  if (pluginRoot === void 0 || pluginRoot.length === 0 || pluginData === void 0 || pluginData.length === 0) {
+  if (pluginRoot === undefined || pluginRoot.length === 0 || pluginData === undefined || pluginData.length === 0) {
     return { action: "skip-missing-env", exitCode: 0 };
   }
   const pluginVersion = await readPluginVersion(pluginRoot);
-  if (pluginVersion === void 0) return { action: "skip-version-unresolved", exitCode: 0 };
+  if (pluginVersion === undefined)
+    return { action: "skip-version-unresolved", exitCode: 0 };
   const state = await readBootstrapState(resolveBootstrapStatePath(pluginData));
-  if (state.completedForVersion === pluginVersion) return { action: "skip-completed", exitCode: 0 };
-  if (await isLockFresh(resolveBootstrapLockPath(pluginData), now)) return { action: "skip-locked", exitCode: 0 };
+  if (state.completedForVersion === pluginVersion)
+    return { action: "skip-completed", exitCode: 0 };
+  if (await isLockFresh(resolveBootstrapLockPath(pluginData), now))
+    return { action: "skip-locked", exitCode: 0 };
   const spawnWorker = options.spawnWorker ?? spawnDetachedWorker;
   spawnWorker({
     args: [options.workerCliPath ?? defaultWorkerCliPath(), "worker"],
@@ -2434,18 +2825,16 @@ async function executeSessionStartHook(options) {
   });
   const writeNotice = options.writeNotice ?? ((line) => process.stdout.write(`${line}
 `));
-  writeNotice(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "SessionStart",
-        additionalContext: BOOTSTRAP_RESTART_NOTICE
-      }
-    })
-  );
+  writeNotice(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: BOOTSTRAP_RESTART_NOTICE
+    }
+  }));
   return { action: "spawned", exitCode: 0 };
 }
 function spawnDetachedWorker(invocation) {
-  const child = spawn(invocation.command, [...invocation.args], {
+  const child = spawn2(invocation.command, [...invocation.args], {
     detached: true,
     env: invocation.env,
     stdio: "ignore"
@@ -2464,17 +2853,21 @@ async function isLockFresh(lockPath, now) {
   }
 }
 async function drainStdin(stdin) {
-  if (stdin.isTTY === true) return;
-  for await (const chunk of stdin) {
-    void chunk;
-  }
+  if (stdin.isTTY === true)
+    return;
+  for await (const chunk of stdin) {}
 }
 
-// src/cli.ts
-var TOP_LEVEL_HELP = "Usage:\n  omo-bootstrap hook session-start\n  omo-bootstrap worker [--codex-home <dir>] [--once] [--only <step>] [--manifest-dir <dir>]\n  omo-bootstrap download <manifest> <platform> <destination-dir>\n  omo-bootstrap help | --help | -h\n";
+// components/bootstrap/src/cli.ts
+var TOP_LEVEL_HELP = `Usage:
+  omo-bootstrap hook session-start
+  omo-bootstrap worker [--codex-home <dir>] [--once] [--only <step>] [--manifest-dir <dir>]
+  omo-bootstrap download <manifest> <platform> <destination-dir>
+  omo-bootstrap help | --help | -h
+`;
 async function runDownloadCommand(args) {
   const [manifestName, platformKey, destinationDir] = args;
-  if (manifestName === void 0 || platformKey === void 0 || destinationDir === void 0) {
+  if (manifestName === undefined || platformKey === undefined || destinationDir === undefined) {
     process.stderr.write(`[omo-bootstrap] download requires <manifest> <platform> <destination-dir>
 ${TOP_LEVEL_HELP}`);
     return 1;
@@ -2505,17 +2898,15 @@ ${TOP_LEVEL_HELP}`);
 `);
     return 0;
   }
-  process.stdout.write(
-    result.ran ? `[omo-bootstrap] worker finished: ${result.status}
+  process.stdout.write(result.ran ? `[omo-bootstrap] worker finished: ${result.status}
 ` : `[omo-bootstrap] worker skipped: ${result.reason}
-`
-  );
+`);
   return 0;
 }
 async function main() {
   const argv = process.argv.slice(2);
   const command = argv[0];
-  if (command === void 0 || command === "help" || command === "--help" || command === "-h") {
+  if (command === undefined || command === "help" || command === "--help" || command === "-h") {
     process.stdout.write(TOP_LEVEL_HELP);
     return 0;
   }
@@ -2534,7 +2925,8 @@ ${TOP_LEVEL_HELP}`);
 }
 function isProcessEntry() {
   const entry = process.argv[1];
-  if (entry === void 0) return false;
+  if (entry === undefined)
+    return false;
   try {
     return realpathSync(entry) === realpathSync(fileURLToPath4(import.meta.url));
   } catch {
@@ -2551,33 +2943,33 @@ if (isProcessEntry()) {
   });
 }
 export {
-  BOOTSTRAP_DOCTOR_HINT,
-  BOOTSTRAP_RESTART_NOTICE,
-  GIT_BASH_INSTALL_HINT,
-  INSTALL_SNAPSHOT_FILENAME,
-  SETUP_MARKETPLACE_NAME,
-  SETUP_PLUGIN_NAME,
-  SG_FORCE_PROVISION_ENV_KEY,
-  SG_PROVISION_COMPONENT,
-  appendBootstrapLog,
-  bootstrapLocks,
-  defaultWorkerSteps,
-  detectInstallFlow,
-  detectInstallFlowDetailed,
-  detectInstallFlowForTest,
-  detectInstallFlowFromEnvironment,
-  executeSessionStartHook,
-  parseBootstrapState,
-  parseWorkerFlags,
-  readBootstrapState,
-  readPluginVersion,
-  resolveBootstrapLockPath,
-  resolveBootstrapStatePath,
-  resolveCodexHome,
-  resolvePluginDataRoot,
-  runBootstrapWorker,
-  runSessionStartHook,
-  runSgProvision,
+  sgProvisionDestination,
   runWorkerSetup,
-  sgProvisionDestination
+  runSgProvision,
+  runSessionStartHook,
+  runBootstrapWorker,
+  resolvePluginDataRoot,
+  resolveCodexHome,
+  resolveBootstrapStatePath,
+  resolveBootstrapLockPath,
+  readPluginVersion,
+  readBootstrapState,
+  parseWorkerFlags,
+  parseBootstrapState,
+  executeSessionStartHook,
+  detectInstallFlowFromEnvironment,
+  detectInstallFlowForTest,
+  detectInstallFlowDetailed,
+  detectInstallFlow,
+  defaultWorkerSteps,
+  bootstrapLocks,
+  appendBootstrapLog,
+  SG_PROVISION_COMPONENT,
+  SG_FORCE_PROVISION_ENV_KEY,
+  SETUP_PLUGIN_NAME,
+  SETUP_MARKETPLACE_NAME,
+  INSTALL_SNAPSHOT_FILENAME,
+  GIT_BASH_INSTALL_HINT,
+  BOOTSTRAP_RESTART_NOTICE,
+  BOOTSTRAP_DOCTOR_HINT
 };

@@ -1,1 +1,1 @@
-export declare function installProcessSignalCleanup(cleanup: () => Promise<void>): () => void;
+export * from "@oh-my-opencode/lsp-core/lsp/process-signal-cleanup";

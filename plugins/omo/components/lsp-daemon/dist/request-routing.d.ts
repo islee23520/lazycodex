@@ -1,5 +1,5 @@
-import { type JsonRpcResponse } from "@code-yeongyu/lsp-tools-mcp/dist/mcp.js";
-import { type RequestContext } from "@code-yeongyu/lsp-tools-mcp/dist/request-context.js";
+import { type JsonRpcResponse } from "@oh-my-opencode/lsp-core/mcp";
+import { type RequestContext } from "@oh-my-opencode/lsp-core/request-context";
 export declare const CONTEXT_KEY = "_context";
 export interface RoutedRequest {
     input: unknown;
