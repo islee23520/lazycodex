@@ -8,3 +8,8 @@ allowBuilds:
   sharp: true
   workerd: true
 
+overrides:
+  "@opentelemetry/core": 2.8.0
+  esbuild: 0.28.1
+  postcss: 8.5.15
+  ws: 8.21.0
