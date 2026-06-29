@@ -4501,18 +4501,27 @@ async function runPostToolUseHook(input, options = {}) {
 // components/rules/src/cli.ts
 var command = process.argv[2];
 var subcommand = process.argv[3];
+processStdout.on("error", consumeStreamError);
 if (command === "hook" && subcommand === "session-start") {
-  await runHookCli("SessionStart");
+  await runHookCliSafely("SessionStart");
 } else if (command === "hook" && subcommand === "user-prompt-submit") {
-  await runHookCli("UserPromptSubmit");
+  await runHookCliSafely("UserPromptSubmit");
 } else if (command === "hook" && subcommand === "post-tool-use") {
-  await runHookCli("PostToolUse");
+  await runHookCliSafely("PostToolUse");
 } else if (command === "hook" && subcommand === "post-compact") {
-  await runHookCli("PostCompact");
+  await runHookCliSafely("PostCompact");
 } else {
   process.stderr.write(`Usage: omo-rules hook [session-start|user-prompt-submit|post-tool-use|post-compact]
 `);
   process.exitCode = 1;
+}
+async function runHookCliSafely(eventName) {
+  try {
+    await runHookCli(eventName);
+  } catch (error) {
+    process.stderr.write(`[omo-rules] ${eventName} hook skipped after error: ${formatError(error)}
+`);
+  }
 }
 async function runHookCli(eventName) {
   const raw = await readStdin();
@@ -4537,6 +4546,9 @@ async function runHook(eventName, parsed, options) {
     case "PostCompact":
       return isCodexPostCompactInput(parsed) ? await runPostCompactHook(parsed, options) : "";
   }
+}
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 function parseHookInput(raw) {
   try {
@@ -4591,4 +4603,6 @@ function writeStdout(output) {
       resolve11();
     });
   });
+}
+function consumeStreamError(_error) {
 }

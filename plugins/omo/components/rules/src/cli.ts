@@ -17,17 +17,27 @@ const command = process.argv[2];
 const subcommand = process.argv[3];
 type HookCliEventName = "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "PostCompact";
 
+processStdout.on("error", consumeStreamError);
+
 if (command === "hook" && subcommand === "session-start") {
-	await runHookCli("SessionStart");
+	await runHookCliSafely("SessionStart");
 } else if (command === "hook" && subcommand === "user-prompt-submit") {
-	await runHookCli("UserPromptSubmit");
+	await runHookCliSafely("UserPromptSubmit");
 } else if (command === "hook" && subcommand === "post-tool-use") {
-	await runHookCli("PostToolUse");
+	await runHookCliSafely("PostToolUse");
 } else if (command === "hook" && subcommand === "post-compact") {
-	await runHookCli("PostCompact");
+	await runHookCliSafely("PostCompact");
 } else {
 	process.stderr.write("Usage: omo-rules hook [session-start|user-prompt-submit|post-tool-use|post-compact]\n");
 	process.exitCode = 1;
+}
+
+async function runHookCliSafely(eventName: HookCliEventName): Promise<void> {
+	try {
+		await runHookCli(eventName);
+	} catch (error) {
+		process.stderr.write(`[omo-rules] ${eventName} hook skipped after error: ${formatError(error)}\n`);
+	}
 }
 
 async function runHookCli(eventName: HookCliEventName): Promise<void> {
@@ -54,6 +64,10 @@ async function runHook(eventName: HookCliEventName, parsed: unknown, options: Co
 	}
 }
 
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 function parseHookInput(raw: string): unknown | undefined {
 	try {
 		const parsed: unknown = JSON.parse(raw);
@@ -62,6 +76,8 @@ function parseHookInput(raw: string): unknown | undefined {
 		return undefined;
 	}
 }
+
+function consumeStreamError(_error: Error): void {}
 
 function isCodexSessionStartInput(value: unknown): value is CodexSessionStartInput {
 	return (
